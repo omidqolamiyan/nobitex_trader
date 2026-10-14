@@ -2,12 +2,22 @@ name: Nobitex Market Bot
 
 on:
   workflow_dispatch:
+
+  schedule:
+    - cron: "*/5 * * * *"
+
   push:
     branches:
       - main
+    paths-ignore:
+      - "paper_state.json"
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: nobitex-paper-bot
+  cancel-in-progress: false
 
 jobs:
   market-check:
@@ -24,3 +34,18 @@ jobs:
 
       - name: Run Nobitex Market Bot
         run: python bot.py
+
+      - name: Save paper trading state
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add paper_state.json
+
+          if git diff --cached --quiet; then
+            echo "تغییری برای ذخیره وجود ندارد."
+          else
+            git commit -m "Update paper trading state"
+            git push
+          fi
