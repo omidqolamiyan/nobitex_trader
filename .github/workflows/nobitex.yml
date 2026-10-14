@@ -10,7 +10,7 @@ push:
 branches:
 - main
 paths-ignore:
-- "paper_state.v4.json"
+- "paper_state_v4.json"
 
 permissions:
 contents: write
