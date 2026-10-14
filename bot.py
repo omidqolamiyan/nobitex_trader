@@ -1,11 +1,16 @@
 import json
+import os
+import time
 import urllib.request
 import urllib.parse
-import time
 from datetime import datetime, timezone
 
-
 API_URL = "https://apiv2.nobitex.ir/market/udf/history"
+
+STATE_FILE = "paper_state.json"
+
+INITIAL_CAPITAL = 5.0
+FEE_RATE = 0.002
 
 MARKETS = [
     ("BTCUSDT", "بیت‌کوین"),
@@ -25,7 +30,7 @@ def get_candles(symbol, resolution, count=60):
 
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "NobitexMarketBot/1.0"}
+        headers={"User-Agent": "NobitexPaperBot/1.0"}
     )
 
     with urllib.request.urlopen(request, timeout=20) as response:
@@ -36,42 +41,43 @@ def get_candles(symbol, resolution, count=60):
             data.get("errmsg", "دریافت کندل ناموفق بود")
         )
 
-    candles = data.get("c", [])
+    closes = data.get("c", [])
+    times = data.get("t", [])
 
-    if len(candles) < 25:
-        raise ValueError("تعداد کندل‌های دریافتی کافی نیست")
+    if len(closes) != len(times) or len(closes) < 25:
+        raise ValueError("اطلاعات کندل کافی نیست")
 
-    # حذف آخرین کندل؛ ممکن است هنوز بسته نشده باشد.
-    return [float(x) for x in candles[:-1]]
+    # آخرین کندل ممکن است هنوز بسته نشده باشد.
+    closes = [float(x) for x in closes[:-1]]
+    closed_times = times[:-1]
+
+    return closes, int(closed_times[-1])
 
 
 def ema(values, period):
     if len(values) < period:
-        raise ValueError("داده کافی برای محاسبه EMA وجود ندارد")
+        raise ValueError("داده کافی برای EMA وجود ندارد")
 
     result = sum(values[:period]) / period
     multiplier = 2 / (period + 1)
 
     for value in values[period:]:
-        result = (
-            value * multiplier
-            + result * (1 - multiplier)
-        )
+        result = value * multiplier + result * (1 - multiplier)
 
     return result
 
 
 def rsi(values, period=14):
     if len(values) < period + 1:
-        raise ValueError("داده کافی برای محاسبه RSI وجود ندارد")
+        raise ValueError("داده کافی برای RSI وجود ندارد")
 
     changes = [
         values[i] - values[i - 1]
         for i in range(len(values) - period, len(values))
     ]
 
-    gains = [max(change, 0) for change in changes]
-    losses = [max(-change, 0) for change in changes]
+    gains = [max(x, 0) for x in changes]
+    losses = [max(-x, 0) for x in changes]
 
     avg_gain = sum(gains) / period
     avg_loss = sum(losses) / period
@@ -122,53 +128,128 @@ def combine_signals(scalping, trend):
     return "WAIT"
 
 
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r", encoding="utf-8") as file:
+            return json.load(file)
+
+    allocation = INITIAL_CAPITAL / len(MARKETS)
+
+    return {
+        "initial_capital": INITIAL_CAPITAL,
+        "fee_rate": FEE_RATE,
+        "positions": {
+            symbol: {
+                "cash": allocation,
+                "quantity": 0.0,
+                "entry_price": 0.0,
+                "last_candle": 0,
+            }
+            for symbol, _ in MARKETS
+        }
+    }
+
+
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as file:
+        json.dump(state, file, indent=2, ensure_ascii=False)
+
+
 def main():
-    print("=" * 40)
-    print("ربات تحلیل آزمایشی نوبیتکس")
+    state = load_state()
+    total_equity = 0.0
+
+    print("=" * 42)
+    print("ربات معاملات مجازی نوبیتکس")
+    print("سرمایه اولیه:", INITIAL_CAPITAL, "USDT")
+    print("کارمزد فرضی هر طرف معامله:", FEE_RATE * 100, "%")
+    print("حالت: بدون معامله واقعی")
     print(
         "زمان UTC:",
         datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     )
-    print("حالت: فقط تحلیل؛ بدون معامله واقعی")
-    print("=" * 40)
+    print("=" * 42)
 
     for symbol, name in MARKETS:
-        print(f"\n--- {name} ({symbol}) ---")
+        position = state["positions"][symbol]
 
         try:
-            # اسکالپینگ: کندل‌های ۵ دقیقه‌ای
-            short_candles = get_candles(symbol, 5)
+            short_closes, candle_time = get_candles(symbol, 5)
+            long_closes, _ = get_candles(symbol, 15)
 
-            # دنبال‌کردن روند: کندل‌های ۱۵ دقیقه‌ای
-            long_candles = get_candles(symbol, 15)
+            scalp = analyze_scalping(short_closes)
+            trend = analyze_trend(long_closes)
+            signal = combine_signals(scalp, trend)
 
-            scalp_signal = analyze_scalping(short_candles)
-            trend_signal = analyze_trend(long_candles)
+            price = short_closes[-1]
 
-            final_signal = combine_signals(
-                scalp_signal,
-                trend_signal
+            print(f"\n--- {name} ({symbol}) ---")
+            print("قیمت:", price)
+            print("اسکالپینگ:", scalp)
+            print("روند:", trend)
+            print("سیگنال نهایی:", signal)
+
+            # هر کندل پنج‌دقیقه‌ای فقط یک بار بررسی معاملاتی می‌شود.
+            if candle_time != position["last_candle"]:
+                position["last_candle"] = candle_time
+
+                if signal == "BUY" and position["quantity"] == 0:
+                    cash = position["cash"]
+
+                    if cash > 0:
+                        position["quantity"] = (
+                            cash * (1 - FEE_RATE) / price
+                        )
+                        position["entry_price"] = price
+                        position["cash"] = 0.0
+
+                        print("معامله مجازی: خرید انجام شد")
+
+                elif signal == "SELL" and position["quantity"] > 0:
+                    proceeds = (
+                        position["quantity"]
+                        * price
+                        * (1 - FEE_RATE)
+                    )
+
+                    position["cash"] = proceeds
+                    position["quantity"] = 0.0
+                    position["entry_price"] = 0.0
+
+                    print("معامله مجازی: فروش انجام شد")
+
+                else:
+                    print("معامله جدیدی انجام نشد")
+
+            equity = (
+                position["cash"]
+                + position["quantity"] * price
             )
 
-            print(
-                "قیمت آخرین کندل ۵ دقیقه‌ای:",
-                short_candles[-1]
-            )
-            print("سیگنال اسکالپینگ:", scalp_signal)
-            print("سیگنال روند:", trend_signal)
-            print("نتیجه ترکیبی:", final_signal)
+            total_equity += equity
 
-            if final_signal == "BUY":
-                print("وضعیت: فرصت احتمالی خرید؛ نیازمند بررسی بیشتر")
-
-            elif final_signal == "SELL":
-                print("وضعیت: سیگنال احتمالی فروش؛ نیازمند بررسی بیشتر")
-
-            else:
-                print("وضعیت: فعلاً سیگنال ترکیبی نداریم")
+            print(f"ارزش مجازی این بخش: {equity:.4f} USDT")
+            print(f"موجودی نقدی: {position['cash']:.4f} USDT")
+            print(f"مقدار دارایی: {position['quantity']:.8f}")
 
         except Exception as error:
-            print("خطا در تحلیل بازار:", error)
+            print(f"خطا در تحلیل {name}: {error}")
+
+            # اگر دریافت قیمت ناموفق باشد، ارزش این بخش
+            # فعلاً قابل محاسبه نیست.
+            total_equity = None
+
+    save_state(state)
+
+    if total_equity is not None:
+        profit = total_equity - INITIAL_CAPITAL
+
+        print("\n" + "=" * 42)
+        print(f"ارزش کل سرمایه مجازی: {total_equity:.4f} USDT")
+        print(f"سود/زیان نسبت به سرمایه اولیه: {profit:+.4f} USDT")
+        print("=" * 42)
+
+    print("اطلاعات معاملات در", STATE_FILE, "ذخیره شد.")
 
 
 if __name__ == "__main__":
