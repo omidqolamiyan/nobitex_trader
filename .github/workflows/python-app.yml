@@ -1,25 +1,26 @@
 name: Nobitex Market Bot
 
 on:
-workflow_dispatch:
-push:
-branches: ["main"]
+  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
-contents: read
+  contents: read
 
 jobs:
-market-check:
-runs-on: ubuntu-latest
+  market-check:
+    runs-on: ubuntu-latest
 
-steps:
-  - name: Download repository
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  - name: Set up Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: "3.11"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
 
-  - name: Run Nobitex market bot
-    run: python -u bot.py
+      - name: Run Nobitex Market Bot
+        run: python bot.py
