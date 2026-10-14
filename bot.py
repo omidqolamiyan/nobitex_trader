@@ -92,13 +92,11 @@ def rsi(values, period=14):
 
 
 def analyze_market(short_closes, long_closes):
-    # بررسی روند کوتاه‌مدت
     short_fast = ema(short_closes[-40:], 5)
     short_slow = ema(short_closes[-40:], 13)
     momentum = rsi(short_closes, 14)
     price = short_closes[-1]
 
-    # تأیید روند در تایم‌فریم بالاتر
     long_fast = ema(long_closes[-40:], 9)
     long_slow = ema(long_closes[-40:], 21)
     long_price = long_closes[-1]
@@ -116,13 +114,13 @@ def analyze_market(short_closes, long_closes):
     bullish_momentum = (
         short_fast > short_slow
         and price > short_fast
-        and 52 <= momentum <= 68
+        and 48 <= momentum <= 75
     )
 
     bearish_momentum = (
         short_fast < short_slow
         and price < short_fast
-        and 32 <= momentum <= 48
+        and 25 <= momentum <= 52
     )
 
     if bullish_trend and bullish_momentum:
