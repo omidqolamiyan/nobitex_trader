@@ -1,52 +1,67 @@
 import json
 import urllib.request
-import time
+import urllib.parse
 from datetime import datetime
 
 API_URL = "https://apiv2.nobitex.ir/market/stats"
 
-SYMBOLS = [
-    "BTCUSDT",
-    "ETHUSDT",
-    "BTCIRT",
-    "ETHIRT"
+MARKETS = [
+    ("BTC/USDT", "btc", "usdt"),
+    ("ETH/USDT", "eth", "usdt"),
+    ("BTC/IRT", "btc", "rls"),
+    ("ETH/IRT", "eth", "rls"),
 ]
 
-def get_market_data():
-    url = API_URL
+
+def get_market_data(src, dst):
+    params = urllib.parse.urlencode({
+        "srcCurrency": src,
+        "dstCurrency": dst
+    })
+
+    url = f"{API_URL}?{params}"
+
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "Mozilla/5.0"}
+        headers={"User-Agent": "NobitexMarketBot/1.0"}
     )
 
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            data = json.loads(response.read().decode("utf-8"))
+    with urllib.request.urlopen(request, timeout=20) as response:
+        data = json.loads(response.read().decode("utf-8"))
 
-        if data.get("status") != "ok":
-            print("پاسخ بازار معتبر نیست.")
-            return
+    if data.get("status") != "ok":
+        raise ValueError(f"پاسخ نامعتبر API: {data}")
 
-        stats = data.get("stats", {})
+    market_key = f"{src}-{dst}"
+    market = data.get("stats", {}).get(market_key)
 
-        print("\nزمان بررسی:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    if not market:
+        raise ValueError(f"اطلاعات بازار {market_key} پیدا نشد")
 
-        for symbol in SYMBOLS:
-            market = stats.get(symbol)
+    return market
 
-            if not market:
-                print(symbol, "- اطلاعات بازار موجود نیست")
-                continue
+
+def main():
+    print(
+        "\nزمان بررسی:",
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+
+    for name, src, dst in MARKETS:
+        try:
+            market = get_market_data(src, dst)
 
             print(
-                symbol,
-                "| آخرین قیمت:", market.get("latest"),
-                "| کمترین قیمت ۲۴ ساعت:", market.get("dayLow"),
-                "| بیشترین قیمت ۲۴ ساعت:", market.get("dayHigh")
+                f"{name} | "
+                f"آخرین قیمت: {market.get('latest')} | "
+                f"کمترین ۲۴ ساعت: {market.get('dayLow')} | "
+                f"بیشترین ۲۴ ساعت: {market.get('dayHigh')} | "
+                f"تغییر ۲۴ ساعت: {market.get('dayChange')}%"
             )
 
-    except Exception as error:
-        print("خطا در دریافت اطلاعات:", error)
+        except Exception as error:
+            print(f"{name} | خطا در دریافت اطلاعات: {error}")
+
 
 if __name__ == "__main__":
-    get_market_data()
+    main()
