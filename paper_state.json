@@ -6,13 +6,16 @@
       "cash": 2.5,
       "quantity": 0.0,
       "entry_price": 0.0,
-      "last_candle": 1791977400
+      "last_candle": 1791978300,
+      "entry_cost": 0.0
     },
     "ETHUSDT": {
       "cash": 2.5,
       "quantity": 0.0,
       "entry_price": 0.0,
-      "last_candle": 1791977400
+      "last_candle": 1791978300,
+      "entry_cost": 0.0
     }
-  }
+  },
+  "trades": []
 }
