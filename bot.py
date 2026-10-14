@@ -10,7 +10,7 @@ API_URL = "https://apiv2.nobitex.ir/market/udf/history"
 STATE_FILE = "paper_state.json"
 
 INITIAL_CAPITAL = 5.0
-FEE_RATE = 0.002
+FEE_RATE = 0.0013
 
 MARKETS = [
     ("BTCUSDT", "بیت‌کوین"),
