@@ -1,388 +1,283 @@
+#!/usr/bin/env python3
+"""Historical paper backtest for Nobitex USDT markets. No real orders are sent."""
 import json
+import math
 import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
 API_URL = "https://apiv2.nobitex.ir"
-
-MARKETS = ("BTCUSDT", "ETHUSDT")
-STRATEGIES = ("TREND", "REVERSAL")
-
-RESOLUTION = 5
-DAYS = 14
-
+SYMBOLS = {"BTCUSDT": ("btc", "usdt"), "ETHUSDT": ("eth", "usdt")}
+RESOLUTION = "5"
+DAYS_BACK = 30
 INITIAL_CAPITAL = 5.0
-FEE_RATE = 0.0013
-STOP_LOSS = 0.02
-TAKE_PROFIT = 0.04
+FEE_RATE = 0.0013       # estimated fee on each side
+SLIPPAGE_RATE = 0.0005  # conservative assumed slippage on each side
+STOP_LOSS = 0.025
+TAKE_PROFIT = 0.05
+MIN_CANDLES = 100
+REPORT_FILE = "backtest_report.json"
 
 
-def api_get(url):
+def fetch_candles(symbol, days=DAYS_BACK):
+    """Fetch 5-minute candles from Nobitex UDF history endpoint."""
+    now = int(time.time())
+    start = now - days * 24 * 60 * 60
+    params = urllib.parse.urlencode({
+        "symbol": symbol,
+        "resolution": RESOLUTION,
+        "from": start,
+        "to": now,
+    })
+    url = f"{API_URL}/market/udf/history?{params}"
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "Nobitex-Paper-Backtest/1.0"}
+        headers={"User-Agent": "Nobitex-Paper-Backtester/1.0", "Accept": "application/json"},
     )
-
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def fetch_candles(symbol):
-    now = int(time.time())
-    interval = RESOLUTION * 60
-    start = now - DAYS * 86400
-    cursor = start
-    candles = {}
-
-    print(f"دریافت اطلاعات {symbol} ...")
-
-    while cursor < now:
-        end = min(now, cursor + interval * 200)
-
-        query = urllib.parse.urlencode({
-            "symbol": symbol,
-            "resolution": str(RESOLUTION),
-            "from": str(cursor),
-            "to": str(end),
-        })
-
-        url = f"{API_URL}/market/udf/history?{query}"
-        data = api_get(url)
-
-        status = data.get("s")
-
-        if status not in ("ok", "no_data"):
-            raise RuntimeError(
-                f"خطا در دریافت {symbol}: {status}"
-            )
-
-        timestamps = data.get("t", [])
-        closes = data.get("c", [])
-
-        if len(timestamps) != len(closes):
-            raise RuntimeError("اطلاعات کندل‌ها ناقص است.")
-
-        for ts, price in zip(timestamps, closes):
-            if ts is None or price is None:
-                continue
-
-            ts = int(ts)
-            price = float(price)
-
-            if price > 0 and ts + interval <= now:
-                candles[ts] = price
-
-        if end >= now:
-            break
-
-        cursor = end
-        time.sleep(0.1)
-
-    result = sorted(candles.items())
-
-    if len(result) < 50:
-        raise RuntimeError(
-            f"تعداد کندل‌های {symbol} کافی نیست: {len(result)}"
-        )
-
-    print(f"{symbol}: تعداد کندل‌ها = {len(result)}")
-
-    return result
+    with urllib.request.urlopen(request, timeout=25) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("s") != "ok":
+        raise RuntimeError(f"Nobitex candle API returned status={data.get('s')}: {data}")
+    times = data.get("t", [])
+    closes = data.get("c", [])
+    highs = data.get("h", [])
+    lows = data.get("l", [])
+    candles = []
+    for i in range(min(len(times), len(closes), len(highs), len(lows))):
+        try:
+            candle = {
+                "time": int(times[i]),
+                "close": float(closes[i]),
+                "high": float(highs[i]),
+                "low": float(lows[i]),
+            }
+            if all(math.isfinite(candle[k]) and candle[k] > 0 for k in ("close", "high", "low")):
+                candles.append(candle)
+        except (TypeError, ValueError):
+            continue
+    candles.sort(key=lambda x: x["time"])
+    # Drop duplicate timestamps if the API returns any.
+    unique = {}
+    for candle in candles:
+        unique[candle["time"]] = candle
+    return [unique[t] for t in sorted(unique)]
 
 
 def ema(values, period):
+    out = [None] * len(values)
     if len(values) < period:
-        return None
-
-    alpha = 2.0 / (period + 1)
-    result = sum(values[:period]) / period
-
-    for value in values[period:]:
-        result = value * alpha + result * (1 - alpha)
-
-    return result
+        return out
+    alpha = 2.0 / (period + 1.0)
+    current = sum(values[:period]) / period
+    out[period - 1] = current
+    for i in range(period, len(values)):
+        current = alpha * values[i] + (1.0 - alpha) * current
+        out[i] = current
+    return out
 
 
 def rsi(values, period=14):
+    out = [None] * len(values)
     if len(values) <= period:
-        return None
+        return out
+    gains = []
+    losses = []
+    for i in range(1, period + 1):
+        delta = values[i] - values[i - 1]
+        gains.append(max(delta, 0.0))
+        losses.append(max(-delta, 0.0))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
 
-    changes = [
-        values[i] - values[i - 1]
-        for i in range(1, len(values))
-    ]
+    def calc(g, l):
+        if l == 0:
+            return 100.0 if g > 0 else 50.0
+        return 100.0 - 100.0 / (1.0 + g / l)
 
-    gains = [max(change, 0) for change in changes]
-    losses = [max(-change, 0) for change in changes]
-
-    average_gain = sum(gains[:period]) / period
-    average_loss = sum(losses[:period]) / period
-
-    for i in range(period, len(changes)):
-        average_gain = (
-            average_gain * (period - 1) + gains[i]
-        ) / period
-
-        average_loss = (
-            average_loss * (period - 1) + losses[i]
-        ) / period
-
-    if average_loss == 0:
-        return 100.0 if average_gain > 0 else 50.0
-
-    relative_strength = average_gain / average_loss
-
-    return 100 - (100 / (1 + relative_strength))
+    out[period] = calc(avg_gain, avg_loss)
+    for i in range(period + 1, len(values)):
+        delta = values[i] - values[i - 1]
+        gain = max(delta, 0.0)
+        loss = max(-delta, 0.0)
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
+        out[i] = calc(avg_gain, avg_loss)
+    return out
 
 
-def get_signal(strategy, closes):
-    if len(closes) < 30:
-        return "WAIT"
-
-    fast_ema = ema(closes, 9)
-    slow_ema = ema(closes, 21)
-    current_rsi = rsi(closes)
-
-    if fast_ema is None or slow_ema is None:
-        return "WAIT"
-
-    if current_rsi is None:
-        return "WAIT"
-
-    price = closes[-1]
-    previous_price = closes[-2]
-
-    if strategy == "TREND":
-        if (
-            fast_ema > slow_ema
-            and price > fast_ema
-            and 52 <= current_rsi <= 67
-        ):
-            return "BUY"
-
-        if fast_ema < slow_ema and current_rsi < 48:
-            return "SELL"
-
-    elif strategy == "REVERSAL":
-        if current_rsi <= 30 and price > previous_price:
-            return "BUY"
-
-        if current_rsi >= 68 and price < previous_price:
-            return "SELL"
-
-    return "WAIT"
+def indicators(candles):
+    closes = [c["close"] for c in candles]
+    ema9 = ema(closes, 9)
+    ema21 = ema(closes, 21)
+    rsi14 = rsi(closes, 14)
+    lower = [None] * len(closes)
+    upper = [None] * len(closes)
+    period = 20
+    for i in range(period - 1, len(closes)):
+        window = closes[i - period + 1:i + 1]
+        mean = sum(window) / period
+        variance = sum((x - mean) ** 2 for x in window) / period
+        sd = math.sqrt(variance)
+        lower[i] = mean - 2 * sd
+        upper[i] = mean + 2 * sd
+    return closes, ema9, ema21, rsi14, lower, upper
 
 
-def create_position():
+def signal_for(strategy, i, candles, ind):
+    closes, ema9, ema21, rsi14, lower, upper = ind
+    price = closes[i]
+    prev = closes[i - 1]
+    if strategy == "BUY_HOLD":
+        return "BUY" if i == 60 else "HOLD"
+    if strategy == "EMA_TREND":
+        if ema9[i] is not None and ema21[i] is not None and rsi14[i] is not None:
+            if ema9[i] > ema21[i] and rsi14[i] >= 50:
+                return "BUY"
+            if ema9[i] < ema21[i] or rsi14[i] > 75:
+                return "SELL"
+    elif strategy == "RSI_REVERSAL":
+        if rsi14[i] is not None:
+            if rsi14[i] < 30:
+                return "BUY"
+            if rsi14[i] > 55:
+                return "SELL"
+    elif strategy == "BOLLINGER_REVERSION":
+        if lower[i] is not None and upper[i] is not None:
+            if price < lower[i]:
+                return "BUY"
+            if price > upper[i]:
+                return "SELL"
+    elif strategy == "MOMENTUM_BREAKOUT":
+        lookback = 20
+        if i >= lookback:
+            previous_high = max(c["high"] for c in candles[i - lookback:i])
+            previous_low = min(c["low"] for c in candles[i - lookback:i])
+            if price > previous_high:
+                return "BUY"
+            if price < previous_low:
+                return "SELL"
+    return "HOLD"
+
+
+def backtest(strategy, candles, initial_capital=INITIAL_CAPITAL):
+    if len(candles) < MIN_CANDLES:
+        raise ValueError(f"Only {len(candles)} candles available; need at least {MIN_CANDLES}.")
+    ind = indicators(candles)
+    cash = float(initial_capital)
+    qty = 0.0
+    entry_price = 0.0
+    entry_value = 0.0
+    trades = []
+    equity_curve = []
+    # Start at index 60 to warm up indicators. Signals use the current completed candle;
+    # trades are filled at that candle's close with estimated fees and slippage.
+    for i in range(60, len(candles)):
+        price = candles[i]["close"]
+        signal = signal_for(strategy, i, candles, ind)
+        if qty > 0:
+            change = price / entry_price - 1.0
+            if change <= -STOP_LOSS:
+                signal = "SELL"
+            elif change >= TAKE_PROFIT:
+                signal = "SELL"
+        if signal == "BUY" and qty == 0 and cash >= 0.5:
+            fill = price * (1.0 + SLIPPAGE_RATE)
+            spend = cash
+            fee = spend * FEE_RATE
+            qty = max(0.0, (spend - fee) / fill)
+            cash = 0.0
+            entry_price = fill
+            entry_value = spend
+        elif signal == "SELL" and qty > 0:
+            fill = price * (1.0 - SLIPPAGE_RATE)
+            gross = qty * fill
+            fee = gross * FEE_RATE
+            proceeds = gross - fee
+            pnl = proceeds - entry_value
+            trades.append({
+                "entry_price": round(entry_price, 8),
+                "exit_price": round(fill, 8),
+                "pnl_usdt": round(pnl, 8),
+                "return_pct": round((proceeds / entry_value - 1.0) * 100.0, 4) if entry_value else 0.0,
+            })
+            cash = proceeds
+            qty = 0.0
+            entry_price = 0.0
+            entry_value = 0.0
+        equity_curve.append(cash + qty * price)
+    last_price = candles[-1]["close"]
+    final_equity = cash + qty * last_price
+    # Mark-to-market open position, including an estimated sell fee/slippage for fair comparison.
+    if qty > 0:
+        liquidation_value = qty * last_price * (1.0 - SLIPPAGE_RATE) * (1.0 - FEE_RATE)
+        final_equity = liquidation_value
+    peak = initial_capital
+    max_drawdown = 0.0
+    for value in equity_curve:
+        peak = max(peak, value)
+        if peak > 0:
+            max_drawdown = max(max_drawdown, (peak - value) / peak)
+    wins = sum(1 for t in trades if t["pnl_usdt"] > 0)
+    losses = sum(1 for t in trades if t["pnl_usdt"] < 0)
+    gross_profit = sum(t["pnl_usdt"] for t in trades if t["pnl_usdt"] > 0)
+    gross_loss = abs(sum(t["pnl_usdt"] for t in trades if t["pnl_usdt"] < 0))
     return {
-        "cash": INITIAL_CAPITAL / (
-            len(STRATEGIES) * len(MARKETS)
-        ),
-        "qty": 0.0,
-        "entry_price": 0.0,
-        "entry_cost": 0.0,
-        "closed_trades": 0,
-        "wins": 0,
-        "losses": 0,
+        "initial_capital_usdt": round(initial_capital, 4),
+        "final_equity_usdt": round(final_equity, 4),
+        "profit_loss_usdt": round(final_equity - initial_capital, 4),
+        "return_pct": round((final_equity / initial_capital - 1.0) * 100.0, 3),
+        "closed_trades": len(trades),
+        "wins": wins,
+        "losses": losses,
+        "win_rate_pct": round(wins / len(trades) * 100.0, 2) if trades else 0.0,
+        "profit_factor": round(gross_profit / gross_loss, 3) if gross_loss > 0 else (None if gross_profit == 0 else "infinite"),
+        "max_drawdown_pct": round(max_drawdown * 100.0, 3),
+        "open_position_at_end": qty > 0,
+        "last_price": last_price,
+        "trades": trades,
     }
-
-
-def buy(position, price):
-    cash = position["cash"]
-
-    if cash <= 0:
-        return
-
-    quantity = cash / (price * (1 + FEE_RATE))
-
-    if quantity <= 0:
-        return
-
-    position["qty"] = quantity
-    position["entry_price"] = price
-    position["entry_cost"] = cash
-    position["cash"] = 0.0
-
-
-def sell(position, price):
-    quantity = position["qty"]
-
-    if quantity <= 0:
-        return
-
-    proceeds = quantity * price * (1 - FEE_RATE)
-    pnl = proceeds - position["entry_cost"]
-
-    position["cash"] += proceeds
-    position["closed_trades"] += 1
-
-    if pnl > 0:
-        position["wins"] += 1
-    else:
-        position["losses"] += 1
-
-    position["qty"] = 0.0
-    position["entry_price"] = 0.0
-    position["entry_cost"] = 0.0
-
-
-def run_backtest(candles):
-    closes = [price for _, price in candles]
-
-    positions = {
-        strategy: create_position()
-        for strategy in STRATEGIES
-    }
-
-    for i in range(30, len(closes)):
-        price = closes[i]
-
-        # استفاده از کندل‌های قبلی برای جلوگیری از نگاه به آینده
-        previous_closes = closes[:i]
-
-        for strategy in STRATEGIES:
-            position = positions[strategy]
-
-            if position["qty"] > 0:
-                entry_cost = position["entry_cost"]
-
-                estimated_value = (
-                    position["qty"] * price * (1 - FEE_RATE)
-                )
-
-                net_return = (
-                    estimated_value - entry_cost
-                ) / entry_cost
-
-                if (
-                    net_return <= -STOP_LOSS
-                    or net_return >= TAKE_PROFIT
-                ):
-                    sell(position, price)
-                    continue
-
-            signal = get_signal(strategy, previous_closes)
-
-            if signal == "BUY" and position["qty"] == 0:
-                buy(position, price)
-
-            elif signal == "SELL" and position["qty"] > 0:
-                sell(position, price)
-
-    final_price = closes[-1]
-    results = {}
-
-    initial = INITIAL_CAPITAL / (
-        len(STRATEGIES) * len(MARKETS)
-    )
-
-    for strategy, position in positions.items():
-        final_value = (
-            position["cash"]
-            + position["qty"] * final_price * (1 - FEE_RATE)
-        )
-
-        profit = final_value - initial
-
-        results[strategy] = {
-            "initial": initial,
-            "final": final_value,
-            "profit": profit,
-            "return_pct": profit / initial * 100,
-            "trades": position["closed_trades"],
-            "wins": position["wins"],
-            "losses": position["losses"],
-        }
-
-    return results
 
 
 def main():
-    print("=" * 45)
-    print("بک‌تست تاریخی ربات آزمایشی نوبیتکس")
-    print("=" * 45)
-
-    print(f"سرمایه مجازی کل: {INITIAL_CAPITAL:.2f} USDT")
-    print(f"مدت آزمایش: {DAYS} روز")
-    print(f"فاصله کندل‌ها: {RESOLUTION} دقیقه")
-    print(f"کارمزد هر طرف: {FEE_RATE * 100:.2f}%")
-    print("معاملات واقعی: غیرفعال")
-    print()
-
-    all_results = {
-        strategy: {
-            "initial": 0.0,
-            "final": 0.0,
-            "trades": 0,
-            "wins": 0,
-            "losses": 0,
-        }
-        for strategy in STRATEGIES
+    report = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "mode": "HISTORICAL_BACKTEST_ONLY_NO_REAL_ORDERS",
+        "settings": {
+            "days_requested": DAYS_BACK,
+            "candle_resolution_minutes": 5,
+            "initial_capital_per_test_usdt": INITIAL_CAPITAL,
+            "fee_per_side_pct": FEE_RATE * 100,
+            "assumed_slippage_per_side_pct": SLIPPAGE_RATE * 100,
+            "stop_loss_pct": STOP_LOSS * 100,
+            "take_profit_pct": TAKE_PROFIT * 100,
+            "note": "Past results do not predict future results. Fees, slippage and candle data may differ from live execution.",
+        },
+        "markets": {},
     }
-
-    for symbol in MARKETS:
-        candles = fetch_candles(symbol)
-
-        first_time = datetime.fromtimestamp(
-            candles[0][0], timezone.utc
-        ).strftime("%Y-%m-%d %H:%M UTC")
-
-        last_time = datetime.fromtimestamp(
-            candles[-1][0], timezone.utc
-        ).strftime("%Y-%m-%d %H:%M UTC")
-
-        print(f"بازه {symbol}: {first_time} تا {last_time}")
-
-        results = run_backtest(candles)
-
-        for strategy, result in results.items():
-            all_results[strategy]["initial"] += result["initial"]
-            all_results[strategy]["final"] += result["final"]
-            all_results[strategy]["trades"] += result["trades"]
-            all_results[strategy]["wins"] += result["wins"]
-            all_results[strategy]["losses"] += result["losses"]
-
-    print()
-    print("=" * 45)
-    print("نتیجه نهایی مقایسه استراتژی‌ها")
-    print("=" * 45)
-
-    for strategy in STRATEGIES:
-        result = all_results[strategy]
-
-        initial = result["initial"]
-        final = result["final"]
-        profit = final - initial
-
-        return_pct = (
-            profit / initial * 100 if initial else 0
-        )
-
-        trades = result["trades"]
-        wins = result["wins"]
-        losses = result["losses"]
-
-        win_rate = (
-            wins / trades * 100 if trades else 0
-        )
-
-        print()
-        print(f"استراتژی: {strategy}")
-        print(f"سرمایه اولیه: {initial:.4f} USDT")
-        print(f"ارزش نهایی: {final:.4f} USDT")
-        print(f"سود یا زیان: {profit:+.4f} USDT")
-        print(f"درصد بازدهی: {return_pct:+.2f}%")
-        print(f"معاملات بسته‌شده: {trades}")
-        print(f"معاملات سودده: {wins}")
-        print(f"معاملات زیان‌ده: {losses}")
-        print(f"درصد معاملات سودده: {win_rate:.2f}%")
-
-    print()
-    print("=" * 45)
-    print("پایان بک‌تست")
-    print("این گزارش شبیه‌سازی است، نه تضمین سود آینده.")
-    print("=" * 45)
+    for symbol in SYMBOLS:
+        print(f"Fetching {symbol} candles...")
+        try:
+            candles = fetch_candles(symbol)
+            if len(candles) < MIN_CANDLES:
+                raise RuntimeError(f"Not enough candles received: {len(candles)}")
+            first = datetime.fromtimestamp(candles[0]["time"], timezone.utc).isoformat()
+            last = datetime.fromtimestamp(candles[-1]["time"], timezone.utc).isoformat()
+            market_result = {"candles": len(candles), "first_candle_utc": first, "last_candle_utc": last, "strategies": {}}
+            for strategy in ("BUY_HOLD", "EMA_TREND", "RSI_REVERSAL", "BOLLINGER_REVERSION", "MOMENTUM_BREAKOUT"):
+                result = backtest(strategy, candles)
+                # Exclude detailed individual trades from the console summary; retain them in JSON.
+                market_result["strategies"][strategy] = result
+                print(f"{symbol} | {strategy}: {result['return_pct']:+.3f}% | final ${result['final_equity_usdt']:.4f} | trades {result['closed_trades']} | max DD {result['max_drawdown_pct']:.2f}%")
+            report["markets"][symbol] = market_result
+        except Exception as exc:
+            report["markets"][symbol] = {"error": str(exc)}
+            print(f"ERROR {symbol}: {exc}")
+    with open(REPORT_FILE, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+    print(f"\nReport saved to {REPORT_FILE}")
+    if all("error" in report["markets"].get(s, {}) for s in SYMBOLS):
+        raise SystemExit("Backtest failed for all markets; inspect errors above.")
 
 
 if __name__ == "__main__":
