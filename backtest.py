@@ -67,4 +67,4 @@ def fetch_candles(symbol):
             if price > 0 and ts + interval <= now:
                 candles[ts] = price
 
-        if end >= now
+        if end >= now:
