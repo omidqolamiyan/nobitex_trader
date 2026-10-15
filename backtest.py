@@ -344,3 +344,48 @@ def main():
             all_results[strategy]["initial"] += result["initial"]
             all_results[strategy]["final"] += result["final"]
             all_results[strategy]["profit"]
+                        all_results[strategy]["trades"] += result["trades"]
+            all_results[strategy]["wins"] += result["wins"]
+            all_results[strategy]["losses"] += result["losses"]
+
+    print()
+    print("=" * 45)
+    print("نتیجه نهایی مقایسه استراتژی‌ها")
+    print("=" * 45)
+
+    for strategy in STRATEGIES:
+        result = all_results[strategy]
+
+        initial = result["initial"]
+        final = result["final"]
+        profit = final - initial
+
+        return_pct = (
+            profit / initial * 100 if initial else 0
+        )
+
+        trades = result["trades"]
+        wins = result["wins"]
+        losses = result["losses"]
+
+        win_rate = (
+            wins / trades * 100 if trades else 0
+        )
+
+        print()
+        print(f"استراتژی: {strategy}")
+        print(f"سرمایه اولیه: {initial:.4f} USDT")
+        print(f"ارزش نهایی: {final:.4f} USDT")
+        print(f"سود یا زیان: {profit:+.4f} USDT")
+        print(f"درصد بازدهی: {return_pct:+.2f}%")
+        print(f"معاملات بسته‌شده: {trades}")
+        print(f"معاملات سودده: {wins}")
+        print(f"معاملات زیان‌ده: {losses}")
+        print(f"درصد معاملات سودده: {win_rate:.2f}%")
+
+    print()
+    print("پایان بک‌تست؛ معاملات واقعی انجام نشده‌اند.")
+
+
+if __name__ == "__main__":
+    main()
