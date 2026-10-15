@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 
 API_URL = "https://apiv2.nobitex.ir/market/udf/history"
 LOOKBACK_DAYS = 60
-RESOLUTION = "5"
+# Nobitex returned only about 7 days at 5-minute resolution in the last run.
+# Use hourly candles to test whether 60 days of history are available.
+RESOLUTION = "60"
 INITIAL_CAPITAL = 5.0
 FEE_RATE = 0.0013
 SLIPPAGE_RATE = 0.0005
@@ -44,7 +46,7 @@ def fetch_chunk(symbol, start_ts, end_ts, page=1):
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "Nobitex-Paper-Backtest/7.0",
+            "User-Agent": "Nobitex-Paper-Backtest/8.0",
             "Accept": "application/json",
         },
     )
