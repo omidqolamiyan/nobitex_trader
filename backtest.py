@@ -24,6 +24,7 @@ STRATEGIES = [
 REPORT_FILE = "backtest_report.json"
 MAX_PAGES = 50
 REQUEST_DELAY_SECONDS = 2.1
+MIN_HISTORY_COVERAGE = 0.95
 
 
 def utc_text(timestamp):
@@ -76,7 +77,7 @@ def fetch_chunk(symbol, start_ts, end_ts, page=1):
 
 
 def fetch_history(symbol):
-    """Use API pagination across the entire requested 60-day range."""
+    """Fetch paginated historical candles and reject incomplete lookbacks."""
     now = int(time.time())
     start = now - LOOKBACK_DAYS * 86400
     all_rows = {}
@@ -89,7 +90,7 @@ def fetch_history(symbol):
             raise RuntimeError(f"{symbol}: failed on page {page}: {exc}") from exc
 
         if not rows:
-            print(f"{symbol}: page {page} returned no data; stopping pagination.")
+            print(f"{symbol}: page {page} returned no data; pagination complete.")
             break
 
         before = len(all_rows)
@@ -97,30 +98,49 @@ def fetch_history(symbol):
             if start <= row["t"] <= now:
                 all_rows[row["t"]] = row
         added = len(all_rows) - before
-        print(f"{symbol}: page {page}, received {len(rows)}, new {added}, unique total {len(all_rows)}")
+        print(
+            f"{symbol}: page {page}, received {len(rows)}, "
+            f"new {added}, unique total {len(all_rows)}"
+        )
 
-        # A repeated page means the API ignored the page parameter or has no more data.
+        # Some APIs can return a short page before the final page. Continue
+        # until the response is empty or pagination repeats existing candles.
         if added == 0:
-            print(f"{symbol}: page {page} added no new candles; stopping to avoid an infinite loop.")
+            print(
+                f"{symbol}: page {page} added no new candles; "
+                "stopping to avoid an infinite loop."
+            )
             break
-        if len(rows) < 500:
-            print(f"{symbol}: page returned fewer than 500 candles; pagination appears complete.")
-            break
-        time.sleep(REQUEST_DELAY_SECONDS)
+
+        if page < MAX_PAGES:
+            time.sleep(REQUEST_DELAY_SECONDS)
+    else:
+        print(f"{symbol}: reached MAX_PAGES={MAX_PAGES}.")
 
     result = [all_rows[t] for t in sorted(all_rows)]
     expected = LOOKBACK_DAYS * 24 * 60 // int(RESOLUTION)
     coverage = (len(result) / expected * 100) if expected else 0.0
-    print(f"{symbol}: {len(result)} unique candles; expected about {expected}; coverage {coverage:.1f}%")
-    if result:
-        print(f"{symbol}: {utc_text(result[0]['t'])} -> {utc_text(result[-1]['t'])}")
+    print(
+        f"{symbol}: {len(result)} unique candles; expected about {expected}; "
+        f"coverage {coverage:.1f}%"
+    )
 
-    if len(result) < expected * 0.80:
+    if result:
+        first_ts, last_ts = result[0]["t"], result[-1]["t"]
+        time_coverage = max(0, last_ts - first_ts) / (LOOKBACK_DAYS * 86400) * 100
+        print(f"{symbol}: {utc_text(first_ts)} -> {utc_text(last_ts)}")
+        print(f"{symbol}: timestamp-span coverage {time_coverage:.1f}%")
+    else:
+        time_coverage = 0.0
+
+    if len(result) < expected * MIN_HISTORY_COVERAGE or time_coverage < MIN_HISTORY_COVERAGE * 100:
         raise RuntimeError(
-            f"{symbol}: insufficient history. Expected about {expected} candles, "
-            f"received {len(result)} ({coverage:.1f}%). The backtest stopped rather than "
-            "presenting a partial period as a 60-day test."
+            f"{symbol}: insufficient history for a reliable {LOOKBACK_DAYS}-day test. "
+            f"Expected about {expected} candles, received {len(result)} "
+            f"({coverage:.1f}% candle coverage; {time_coverage:.1f}% time-span coverage). "
+            "Backtest stopped rather than presenting an incomplete period as a full test."
         )
+
     if len(result) < 200:
         raise RuntimeError(f"{symbol}: too few candles for a meaningful test.")
     return result
