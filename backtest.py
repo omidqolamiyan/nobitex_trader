@@ -5,9 +5,9 @@ import urllib.request
 from datetime import datetime, timezone
 
 API_URL = "https://apiv2.nobitex.ir/market/udf/history"
-LOOKBACK_DAYS = 60
-# Nobitex returned only about 7 days at 5-minute resolution in the last run.
-# Use hourly candles to test whether 60 days of history are available.
+LOOKBACK_DAYS = 180
+# Hourly candles allow a longer historical window than 5-minute candles.
+# The 180-day request is rejected if the API cannot provide sufficient coverage.
 RESOLUTION = "60"
 INITIAL_CAPITAL = 5.0
 FEE_RATE = 0.0013
@@ -258,6 +258,7 @@ def simulate(candles, strategy, start_index=60):
     entry_price = None
     entry_cost = 0.0
     closed_trades = wins = losses = 0
+    entries = 0
     equity_curve = []
     trade_log = []
     start_index = min(max(start_index, 60), len(candles) - 1)
@@ -299,6 +300,7 @@ def simulate(candles, strategy, start_index=60):
         should_buy = (strategy == "BUY_HOLD" and i == start_index) or signals[i] == "BUY"
         if qty == 0 and cash >= MIN_BUY_CASH and should_buy:
             cash, qty, entry_price, entry_cost = execute_buy(cash, price_open)
+            entries += 1
 
         equity_curve.append(cash + qty * candle["c"])
 
@@ -316,6 +318,7 @@ def simulate(candles, strategy, start_index=60):
         "initial_capital": INITIAL_CAPITAL,
         "final_equity": round(final_equity, 6),
         "return_pct": round(total_return, 3),
+        "entries": entries,
         "closed_trades": closed_trades,
         "wins": wins,
         "losses": losses,
@@ -342,7 +345,8 @@ def run_market(symbol, candles):
         results.append(row)
         print(
             f"{strategy:22} full {full['return_pct']:+7.3f}% | "
-            f"OOS {oos['return_pct']:+7.3f}% | trades {full['closed_trades']:4d} | "
+            f"OOS {oos['return_pct']:+7.3f}% | "
+            f"entries {full['entries']:3d} | closed {full['closed_trades']:3d} | "
             f"max DD {full['max_drawdown_pct']:.2f}%"
         )
     return results
