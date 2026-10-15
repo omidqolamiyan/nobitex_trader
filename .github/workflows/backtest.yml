@@ -1,17 +1,26 @@
 name: Backtest Trading Strategies
+
 'on':
-  workflow_dispatch: {}
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * 1'
+
 permissions:
   contents: read
+
 jobs:
   backtest:
+    name: Run Historical Backtest
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
+      - name: Download repository
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - name: Run historical backtest
+          python-version: '3.12'
+
+      - name: Run backtest
         run: python -u backtest.py
