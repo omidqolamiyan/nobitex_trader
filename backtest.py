@@ -343,7 +343,6 @@ def main():
         for strategy, result in results.items():
             all_results[strategy]["initial"] += result["initial"]
             all_results[strategy]["final"] += result["final"]
-            all_results[strategy]["profit"]
                         all_results[strategy]["trades"] += result["trades"]
             all_results[strategy]["wins"] += result["wins"]
             all_results[strategy]["losses"] += result["losses"]
