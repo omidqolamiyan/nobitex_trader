@@ -185,7 +185,6 @@ def create_position():
         "closed_trades": 0,
         "wins": 0,
         "losses": 0,
-        "realized_pnl": 0.0,
     }
 
 
@@ -216,7 +215,6 @@ def sell(position, price):
     pnl = proceeds - position["entry_cost"]
 
     position["cash"] += proceeds
-    position["realized_pnl"] += pnl
     position["closed_trades"] += 1
 
     if pnl > 0:
@@ -229,17 +227,18 @@ def sell(position, price):
     position["entry_cost"] = 0.0
 
 
-def run_backtest(symbol, candles):
+def run_backtest(candles):
     closes = [price for _, price in candles]
+
     positions = {
         strategy: create_position()
         for strategy in STRATEGIES
     }
 
-    for i in range(30, len(candles)):
+    for i in range(30, len(closes)):
         price = closes[i]
 
-        # سیگنال فقط از کندل‌های بسته‌شده قبلی ساخته می‌شود.
+        # استفاده از کندل‌های قبلی برای جلوگیری از نگاه به آینده
         previous_closes = closes[:i]
 
         for strategy in STRATEGIES:
@@ -274,15 +273,14 @@ def run_backtest(symbol, candles):
     final_price = closes[-1]
     results = {}
 
+    initial = INITIAL_CAPITAL / (
+        len(STRATEGIES) * len(MARKETS)
+    )
+
     for strategy, position in positions.items():
         final_value = (
             position["cash"]
             + position["qty"] * final_price * (1 - FEE_RATE)
-        )
-
-        initial = (
-            INITIAL_CAPITAL
-            / (len(STRATEGIES) * len(MARKETS))
         )
 
         profit = final_value - initial
@@ -295,7 +293,6 @@ def run_backtest(symbol, candles):
             "trades": position["closed_trades"],
             "wins": position["wins"],
             "losses": position["losses"],
-            "realized_pnl": position["realized_pnl"],
         }
 
     return results
@@ -317,7 +314,6 @@ def main():
         strategy: {
             "initial": 0.0,
             "final": 0.0,
-            "profit": 0.0,
             "trades": 0,
             "wins": 0,
             "losses": 0,
@@ -338,12 +334,12 @@ def main():
 
         print(f"بازه {symbol}: {first_time} تا {last_time}")
 
-        results = run_backtest(symbol, candles)
+        results = run_backtest(candles)
 
         for strategy, result in results.items():
             all_results[strategy]["initial"] += result["initial"]
             all_results[strategy]["final"] += result["final"]
-                        all_results[strategy]["trades"] += result["trades"]
+            all_results[strategy]["trades"] += result["trades"]
             all_results[strategy]["wins"] += result["wins"]
             all_results[strategy]["losses"] += result["losses"]
 
@@ -383,7 +379,10 @@ def main():
         print(f"درصد معاملات سودده: {win_rate:.2f}%")
 
     print()
-    print("پایان بک‌تست؛ معاملات واقعی انجام نشده‌اند.")
+    print("=" * 45)
+    print("پایان بک‌تست")
+    print("این گزارش شبیه‌سازی است، نه تضمین سود آینده.")
+    print("=" * 45)
 
 
 if __name__ == "__main__":
