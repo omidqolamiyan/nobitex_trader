@@ -1,228 +1,538 @@
-#!/usr/bin/env python3
-"""Nobitex paper-trading research backtest. Never submits real orders."""
 import json
-import math
 import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
-API_URL = "https://apiv2.nobitex.ir"
-MARKETS = ("BTCUSDT", "ETHUSDT")
-STRATEGIES = ("BUY_HOLD", "EMA_TREND", "RSI_REVERSAL", "BOLLINGER_REVERSION", "MOMENTUM_BREAKOUT")
-RESOLUTION_MINUTES = 5
-DAYS = 60
-INITIAL_CAPITAL = 5.0  # each strategy gets an independent 5 USDT simulation per symbol
-FEE_RATE = 0.0013       # each side
-SLIPPAGE_RATE = 0.0005  # adverse execution assumption per side
+API_URL = "https://apiv2.nobitex.ir/market/udf/history"
+
+LOOKBACK_DAYS = 60
+RESOLUTION = "5"
+INITIAL_CAPITAL = 5.0
+FEE_RATE = 0.0013
+SLIPPAGE_RATE = 0.0005
 STOP_LOSS = 0.025
 TAKE_PROFIT = 0.05
+
+MARKETS = ["BTCUSDT", "ETHUSDT"]
+STRATEGIES = [
+    "BUY_HOLD",
+    "EMA_TREND",
+    "RSI_REVERSAL",
+    "BOLLINGER_REVERSION",
+    "MOMENTUM_BREAKOUT",
+]
+
 REPORT_FILE = "backtest_report.json"
 
 
-def api_get(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "Nobitex-Paper-Backtest/2.0"})
-    with urllib.request.urlopen(req, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+def utc_text(timestamp):
+    return datetime.fromtimestamp(
+        timestamp, timezone.utc
+    ).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def fetch_candles(symbol):
-    now = int(time.time())
-    step = RESOLUTION_MINUTES * 60
-    start = now - DAYS * 86400
-    cursor = start
-    candles = {}
-    print(f"Fetching {symbol} candles for up to {DAYS} days...")
-    while cursor < now:
-        end = min(now, cursor + step * 180)
-        params = urllib.parse.urlencode({"symbol": symbol, "resolution": str(RESOLUTION_MINUTES), "from": str(cursor), "to": str(end)})
-        data = api_get(f"{API_URL}/market/udf/history?{params}")
-        status = data.get("s")
-        if status == "no_data":
-            cursor = end
-            continue
-        if status != "ok":
-            raise RuntimeError(f"Nobitex history API error for {symbol}: {status}; {data}")
-        arrays = [data.get(k, []) for k in ("t", "o", "h", "l", "c", "v")]
-        if not arrays[0] or any(len(a) != len(arrays[0]) for a in arrays[:5]):
-            raise RuntimeError(f"Incomplete OHLC data returned for {symbol}")
-        for ts, op, hi, lo, cl in zip(*arrays[:5]):
-            if ts is None or any(x is None for x in (op, hi, lo, cl)):
-                continue
-            ts = int(ts)
-            if ts + step <= now and min(float(op), float(hi), float(lo), float(cl)) > 0:
-                candles[ts] = {"t": ts, "o": float(op), "h": float(hi), "l": float(lo), "c": float(cl)}
-        cursor = end
-        time.sleep(0.08)
-    rows = [candles[k] for k in sorted(candles)]
-    if len(rows) < 500:
-        raise RuntimeError(f"Not enough candles for {symbol}: {len(rows)}. No result should be trusted.")
-    first = datetime.fromtimestamp(rows[0]["t"], timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    last = datetime.fromtimestamp(rows[-1]["t"], timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    print(f"{symbol}: {len(rows)} candles, {first} -> {last}")
+def fetch_chunk(symbol, start_ts, end_ts):
+    params = {
+        "symbol": symbol,
+        "resolution": RESOLUTION,
+        "from": start_ts,
+        "to": end_ts,
+    }
+
+    url = API_URL + "?" + urllib.parse.urlencode(params)
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Nobitex-Paper-Backtest/6.0",
+            "Accept": "application/json",
+        },
+    )
+
+    with urllib.request.urlopen(request, timeout=30) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    if data.get("s") == "no_data":
+        return []
+
+    if data.get("s") != "ok":
+        raise RuntimeError(
+            f"{symbol}: API error: {data}"
+        )
+
+    timestamps = data.get("t", [])
+    opens = data.get("o", [])
+    highs = data.get("h", [])
+    lows = data.get("l", [])
+    closes = data.get("c", [])
+
+    lengths = [
+        len(timestamps), len(opens), len(highs),
+        len(lows), len(closes)
+    ]
+
+    if len(set(lengths)) != 1:
+        raise RuntimeError(
+            f"{symbol}: inconsistent candle arrays: {lengths}"
+        )
+
+    rows = []
+
+    for i in range(len(timestamps)):
+        row = {
+            "t": int(timestamps[i]),
+            "o": float(opens[i]),
+            "h": float(highs[i]),
+            "l": float(lows[i]),
+            "c": float(closes[i]),
+        }
+
+        if row["c"] > 0 and row["o"] > 0:
+            rows.append(row)
+
     return rows
 
 
-def ema(values, period):
-    if len(values) < period:
-        return None
-    result = sum(values[:period]) / period
-    alpha = 2 / (period + 1)
-    for x in values[period:]:
-        result = alpha * x + (1 - alpha) * result
+def fetch_history(symbol):
+    now = int(time.time())
+    start = now - LOOKBACK_DAYS * 86400
+
+    # One-day chunks contain approximately 288 five-minute candles,
+    # below Nobitex's documented 500-candle response limit.
+    chunk_seconds = 86400
+    all_rows = {}
+    cursor = start
+    request_count = 0
+
+    print(
+        f"\nFetching {symbol}: "
+        f"{LOOKBACK_DAYS} days of 5-minute candles"
+    )
+
+    while cursor < now:
+        chunk_end = min(cursor + chunk_seconds, now)
+
+        try:
+            rows = fetch_chunk(symbol, cursor, chunk_end)
+        except Exception as exc:
+            raise RuntimeError(
+                f"{symbol}: failed near {utc_text(cursor)}: {exc}"
+            ) from exc
+
+        request_count += 1
+
+        for row in rows:
+            if start <= row["t"] <= now:
+                all_rows[row["t"]] = row
+
+        print(
+            f"{symbol}: request {request_count}, "
+            f"candles received {len(rows)}, "
+            f"unique total {len(all_rows)}"
+        )
+
+        cursor = chunk_end
+
+        # Respect the documented public API request limit.
+        time.sleep(2.1)
+
+    result = [
+        all_rows[t] for t in sorted(all_rows)
+    ]
+
+    expected = LOOKBACK_DAYS * 24 * 12
+    coverage = len(result) / expected * 100 if expected else 0
+
+    print(
+        f"{symbol}: {len(result)} unique candles; "
+        f"expected approximately {expected}; "
+        f"coverage {coverage:.1f}%"
+    )
+
+    if result:
+        print(
+            f"{symbol}: {utc_text(result[0]['t'])} "
+            f"-> {utc_text(result[-1]['t'])}"
+        )
+
+    # Never silently claim a complete 60-day test with only one week
+    # of data. Missing candles can still occur naturally.
+    if len(result) < expected * 0.80:
+        raise RuntimeError(
+            f"{symbol}: insufficient history. "
+            f"Expected about {expected} candles, "
+            f"received {len(result)}. "
+            "Backtest stopped to avoid misleading results."
+        )
+
+    if len(result) < 200:
+        raise RuntimeError(
+            f"{symbol}: too few candles for a meaningful test."
+        )
+
     return result
 
 
+def ema(values, period):
+    output = [None] * len(values)
+
+    if len(values) < period:
+        return output
+
+    current = sum(values[:period]) / period
+    output[period - 1] = current
+    alpha = 2.0 / (period + 1)
+
+    for i in range(period, len(values)):
+        current = (
+            values[i] * alpha
+            + current * (1 - alpha)
+        )
+        output[i] = current
+
+    return output
+
+
 def rsi(values, period=14):
+    output = [None] * len(values)
+
     if len(values) <= period:
-        return None
-    changes = [values[i] - values[i - 1] for i in range(1, len(values))]
-    gains = [max(x, 0.0) for x in changes]
-    losses = [max(-x, 0.0) for x in changes]
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
-    for i in range(period, len(changes)):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-    if avg_loss == 0:
-        return 100.0 if avg_gain else 50.0
-    rs = avg_gain / avg_loss
-    return 100 - 100 / (1 + rs)
+        return output
+
+    gains = []
+    losses = []
+
+    for i in range(1, period + 1):
+        change = values[i] - values[i - 1]
+        gains.append(max(change, 0))
+        losses.append(max(-change, 0))
+
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+
+    def value(gain, loss):
+        if loss == 0:
+            return 100.0 if gain > 0 else 50.0
+        rs = gain / loss
+        return 100 - 100 / (1 + rs)
+
+    output[period] = value(avg_gain, avg_loss)
+
+    for i in range(period + 1, len(values)):
+        change = values[i] - values[i - 1]
+        gain = max(change, 0)
+        loss = max(-change, 0)
+
+        avg_gain = (
+            avg_gain * (period - 1) + gain
+        ) / period
+
+        avg_loss = (
+            avg_loss * (period - 1) + loss
+        ) / period
+
+        output[i] = value(avg_gain, avg_loss)
+
+    return output
 
 
-def signal_for(strategy, hist):
-    closes = [x["c"] for x in hist]
-    if len(closes) < 30:
-        return "WAIT"
-    price = closes[-1]
-    prev = closes[-2]
+def make_signals(candles, strategy):
+    closes = [x["c"] for x in candles]
     fast = ema(closes, 9)
     slow = ema(closes, 21)
-    current_rsi = rsi(closes)
-    if strategy == "BUY_HOLD":
-        return "BUY" if len(closes) == 30 else "WAIT"
-    if strategy == "EMA_TREND":
-        if fast and slow and fast > slow and price > fast and current_rsi is not None and 52 <= current_rsi <= 68:
-            return "BUY"
-        if fast and slow and fast < slow and current_rsi is not None and current_rsi < 48:
-            return "SELL"
-    elif strategy == "RSI_REVERSAL":
-        if current_rsi is not None and current_rsi <= 30 and price > prev:
-            return "BUY"
-        if current_rsi is not None and current_rsi >= 68 and price < prev:
-            return "SELL"
-    elif strategy == "BOLLINGER_REVERSION":
-        window = closes[-20:]
-        mean = sum(window) / len(window)
-        std = math.sqrt(sum((x - mean) ** 2 for x in window) / len(window))
-        lower, upper = mean - 2 * std, mean + 2 * std
-        if price < lower and price > prev:
-            return "BUY"
-        if price > upper and price < prev:
-            return "SELL"
-    elif strategy == "MOMENTUM_BREAKOUT":
-        previous_window = closes[-21:-1]
-        if previous_window and price > max(previous_window) and current_rsi is not None and current_rsi < 75:
-            return "BUY"
-        if previous_window and price < min(previous_window):
-            return "SELL"
-    return "WAIT"
+    rsi_values = rsi(closes, 14)
+
+    signals = ["WAIT"] * len(candles)
+
+    for i in range(60, len(candles)):
+        # Signals use only information available at the previous close.
+        j = i - 1
+
+        if strategy == "BUY_HOLD":
+            if i == 60:
+                signals[i] = "BUY"
+
+        elif strategy == "EMA_TREND":
+            if fast[j] is None or slow[j] is None:
+                continue
+
+            if fast[j] > slow[j] and closes[j] > slow[j]:
+                signals[i] = "BUY"
+            elif fast[j] < slow[j]:
+                signals[i] = "SELL"
+
+        elif strategy == "RSI_REVERSAL":
+            if rsi_values[j] is None:
+                continue
+
+            if rsi_values[j] < 30:
+                signals[i] = "BUY"
+            elif rsi_values[j] > 65:
+                signals[i] = "SELL"
+
+        elif strategy == "BOLLINGER_REVERSION":
+            if j < 20:
+                continue
+
+            window = closes[j - 19:j + 1]
+            mean = sum(window) / len(window)
+            variance = sum(
+                (x - mean) ** 2 for x in window
+            ) / len(window)
+
+            deviation = variance ** 0.5
+            lower = mean - 2 * deviation
+            upper = mean + 2 * deviation
+
+            if closes[j] < lower:
+                signals[i] = "BUY"
+            elif closes[j] > mean:
+                signals[i] = "SELL"
+
+        elif strategy == "MOMENTUM_BREAKOUT":
+            if j < 20:
+                continue
+
+            previous_high = max(
+                x["h"] for x in candles[j - 20:j]
+            )
+
+            previous_low = min(
+                x["l"] for x in candles[j - 20:j]
+            )
+
+            if closes[j] > previous_high:
+                signals[i] = "BUY"
+            elif closes[j] < previous_low:
+                signals[i] = "SELL"
+
+    return signals
 
 
-def net_buy_price(price):
-    return price * (1 + SLIPPAGE_RATE)
+def execute_buy(cash, price):
+    # Slippage increases the simulated purchase price.
+    fill_price = price * (1 + SLIPPAGE_RATE)
+    spend = cash / (1 + FEE_RATE)
+    qty = spend / fill_price
+    fee = spend * FEE_RATE
+
+    return 0.0, qty, fill_price, spend + fee
 
 
-def net_sell_price(price):
-    return price * (1 - SLIPPAGE_RATE)
+def execute_sell(qty, price):
+    fill_price = price * (1 - SLIPPAGE_RATE)
+    gross = qty * fill_price
+    fee = gross * FEE_RATE
+    proceeds = gross - fee
+
+    return proceeds, fill_price
 
 
-def simulate(rows, strategy, initial=INITIAL_CAPITAL):
-    cash = initial
+def simulate(candles, strategy, start_index=60):
+    signals = make_signals(candles, strategy)
+
+    cash = INITIAL_CAPITAL
     qty = 0.0
-    entry_price = 0.0
-    entry_equity = 0.0
-    trades = []
+    entry_price = None
+    entry_cost = 0.0
+
+    closed_trades = 0
+    wins = 0
+    losses = 0
     equity_curve = []
-    warmup = 30
-    for i in range(warmup, len(rows)):
-        row = rows[i]
-        # Signals use only candles ending before this candle; execution occurs at this candle's open.
-        hist = rows[:i]
-        price = row["o"]
-        exited_this_bar = False
+    trade_log = []
+
+    start_index = max(start_index, 60)
+
+    for i in range(start_index, len(candles)):
+        candle = candles[i]
+        price_open = candle["o"]
+
         if qty > 0:
-            stop = entry_price * (1 - STOP_LOSS)
-            target = entry_price * (1 + TAKE_PROFIT)
+            stop_price = entry_price * (1 - STOP_LOSS)
+            target_price = entry_price * (1 + TAKE_PROFIT)
+
+            # Conservative assumption if both levels are touched
+            # within the same candle: assume stop loss occurs first.
             exit_price = None
-            reason = None
-            # Conservative assumption if both thresholds are hit in one candle: stop-loss first.
-            if row["l"] <= stop:
-                exit_price, reason = stop, "STOP_LOSS"
-            elif row["h"] >= target:
-                exit_price, reason = target, "TAKE_PROFIT"
-            else:
-                sig = signal_for(strategy, hist)
-                if sig == "SELL":
-                    exit_price, reason = price, "SIGNAL"
+            exit_reason = None
+
+            if candle["l"] <= stop_price:
+                exit_price = stop_price
+                exit_reason = "STOP_LOSS"
+            elif candle["h"] >= target_price:
+                exit_price = target_price
+                exit_reason = "TAKE_PROFIT"
+            elif signals[i] == "SELL":
+                exit_price = price_open
+                exit_reason = "SIGNAL"
+
             if exit_price is not None:
-                executed = net_sell_price(exit_price)
-                proceeds = qty * executed * (1 - FEE_RATE)
-                pnl = proceeds - entry_equity
-                cash += proceeds
-                trades.append({"entry_time": entry_time, "exit_time": row["t"], "entry_price": round(entry_price, 8), "exit_price": round(executed, 8), "pnl_usdt": round(pnl, 8), "reason": reason})
+                proceeds, fill_price = execute_sell(
+                    qty, exit_price
+                )
+
+                profit = proceeds - entry_cost
+                cash = proceeds
+
+                closed_trades += 1
+
+                if profit > 0:
+                    wins += 1
+                else:
+                    losses += 1
+
+                trade_log.append({
+                    "exit_time": candle["t"],
+                    "reason": exit_reason,
+                    "entry_price": entry_price,
+                    "exit_price": fill_price,
+                    "profit": profit,
+                })
+
                 qty = 0.0
-                entry_price = entry_equity = 0.0
-                exited_this_bar = True
-        if qty == 0 and not exited_this_bar:
-            sig = signal_for(strategy, hist)
-            if sig == "BUY" and cash > 0.05:
-                executed = net_buy_price(price)
-                qty = cash / (executed * (1 + FEE_RATE))
-                entry_equity = cash
-                entry_price = executed
-                entry_time = row["t"]
-                cash = 0.0
-        equity = cash + qty * net_sell_price(row["c"]) * (1 - FEE_RATE)
+                entry_price = None
+                entry_cost = 0.0
+
+        if qty == 0 and cash >= 0.50 and signals[i] == "BUY":
+            original_cash = cash
+
+            cash, qty, entry_price, entry_cost = execute_buy(
+                original_cash, price_open
+            )
+
+        equity = cash + qty * candle["c"]
         equity_curve.append(equity)
-    final = cash + qty * net_sell_price(rows[-1]["c"]) * (1 - FEE_RATE)
-    peak = initial
-    max_dd = 0.0
-    for value in equity_curve + [final]:
-        peak = max(peak, value)
-        if peak > 0:
-            max_dd = max(max_dd, (peak - value) / peak)
-    wins = sum(1 for t in trades if t["pnl_usdt"] > 0)
-    losses = len(trades) - wins
-    gross_profit = sum(t["pnl_usdt"] for t in trades if t["pnl_usdt"] > 0)
-    gross_loss = abs(sum(t["pnl_usdt"] for t in trades if t["pnl_usdt"] < 0))
-    return {"initial_usdt": round(initial, 6), "final_usdt": round(final, 6), "return_pct": round((final / initial - 1) * 100, 4), "closed_trades": len(trades), "wins": wins, "losses": losses, "win_rate_pct": round(wins / len(trades) * 100, 2) if trades else 0.0, "profit_factor": round(gross_profit / gross_loss, 4) if gross_loss else (None if gross_profit == 0 else "inf"), "max_drawdown_pct": round(max_dd * 100, 4), "open_position_at_end": qty > 0, "trades_detail": trades}
+
+    if not equity_curve:
+        final_equity = INITIAL_CAPITAL
+        max_drawdown = 0.0
+    else:
+        final_equity = equity_curve[-1]
+        peak = INITIAL_CAPITAL
+        max_drawdown = 0.0
+
+        for equity in equity_curve:
+            peak = max(peak, equity)
+
+            if peak > 0:
+                drawdown = (peak - equity) / peak
+                max_drawdown = max(max_drawdown, drawdown)
+
+    total_return = (
+        (final_equity / INITIAL_CAPITAL) - 1
+    ) * 100
+
+    win_rate = (
+        wins / closed_trades * 100
+        if closed_trades else 0.0
+    )
+
+    return {
+        "strategy": strategy,
+        "initial_capital": INITIAL_CAPITAL,
+        "final_equity": round(final_equity, 6),
+        "return_pct": round(total_return, 3),
+        "closed_trades": closed_trades,
+        "wins": wins,
+        "losses": losses,
+        "win_rate_pct": round(win_rate, 2),
+        "max_drawdown_pct": round(max_drawdown * 100, 3),
+        "trade_log": trade_log,
+    }
+
+
+def run_market(symbol, candles):
+    split = int(len(candles) * 0.70)
+
+    # Use the first 70% for the full-history evaluation.
+    # The final 30% is separately evaluated from fresh capital.
+    # Indicators still have access to earlier candles for warm-up.
+    results = []
+
+    print(
+        f"\n{symbol}: {len(candles)} candles; "
+        f"out-of-sample begins near "
+        f"{utc_text(candles[split]['t'])}"
+    )
+
+    for strategy in STRATEGIES:
+        full = simulate(candles, strategy, 60)
+        oos = simulate(candles, strategy, split)
+
+        row = {
+            "symbol": symbol,
+            "strategy": strategy,
+            "full_period": full,
+            "out_of_sample": oos,
+            "out_of_sample_start": utc_text(candles[split]["t"]),
+        }
+
+        results.append(row)
+
+        print(
+            f"{strategy:22} "
+            f"full {full['return_pct']:+7.3f}% | "
+            f"OOS {oos['return_pct']:+7.3f}% | "
+            f"trades {full['closed_trades']:4d} | "
+            f"max DD {full['max_drawdown_pct']:.2f}%"
+        )
+
+    return results
 
 
 def main():
     print("NOBITEX HISTORICAL BACKTEST — SIMULATION ONLY")
-    print(f"Lookback: {DAYS} days | timeframe: {RESOLUTION_MINUTES}m | fee/side: {FEE_RATE*100:.3f}% | slippage/side: {SLIPPAGE_RATE*100:.3f}%")
-    print(f"Stop loss: {STOP_LOSS*100:.2f}% | take profit: {TAKE_PROFIT*100:.2f}% | real orders: DISABLED\n")
-    report = {"version": 2, "generated_utc": datetime.now(timezone.utc).isoformat(), "settings": {"days_requested": DAYS, "resolution_minutes": RESOLUTION_MINUTES, "initial_capital_per_strategy_per_symbol": INITIAL_CAPITAL, "fee_rate_each_side": FEE_RATE, "slippage_each_side": SLIPPAGE_RATE, "stop_loss_pct": STOP_LOSS * 100, "take_profit_pct": TAKE_PROFIT * 100, "live_trading": False}, "markets": {}}
+    print(
+        f"Lookback: {LOOKBACK_DAYS} days | "
+        f"timeframe: 5m | "
+        f"fee/side: {FEE_RATE * 100:.3f}% | "
+        f"slippage/side: {SLIPPAGE_RATE * 100:.3f}%"
+    )
+    print(
+        f"Stop loss: {STOP_LOSS * 100:.2f}% | "
+        f"take profit: {TAKE_PROFIT * 100:.2f}% | "
+        "real orders: DISABLED"
+    )
+
+    report = {
+        "created_utc": datetime.now(
+            timezone.utc
+        ).isoformat(),
+        "simulation_only": True,
+        "real_orders_enabled": False,
+        "lookback_days_requested": LOOKBACK_DAYS,
+        "resolution_minutes": 5,
+        "fee_rate_per_side": FEE_RATE,
+        "slippage_rate_per_side": SLIPPAGE_RATE,
+        "stop_loss_pct": STOP_LOSS * 100,
+        "take_profit_pct": TAKE_PROFIT * 100,
+        "markets": {},
+    }
+
     for symbol in MARKETS:
-        rows = fetch_candles(symbol)
-        split = int(len(rows) * 0.70)
-        train = rows[:split]
-        test = rows[split:]
-        # Add warm-up context to the test period; report performance starts at the split boundary.
-        test_context = rows[max(0, split - 30):]
-        report["markets"][symbol] = {"candle_count": len(rows), "start_utc": datetime.fromtimestamp(rows[0]["t"], timezone.utc).isoformat(), "end_utc": datetime.fromtimestamp(rows[-1]["t"], timezone.utc).isoformat(), "strategies": {}}
-        print(f"\n{symbol}: {len(rows)} candles; out-of-sample segment begins near {datetime.fromtimestamp(test[0]['t'], timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
-        for strategy in STRATEGIES:
-            full = simulate(rows, strategy)
-            # This is a separate final-segment simulation with independent starting capital.
-            out = simulate(test_context, strategy)
-            report["markets"][symbol]["strategies"][strategy] = {"full_period": full, "out_of_sample_segment": out}
-            print(f"{strategy:22s} full {full['return_pct']:+7.3f}% | OOS {out['return_pct']:+7.3f}% | trades {full['closed_trades']:3d} | max DD {full['max_drawdown_pct']:.2f}%")
-    with open(REPORT_FILE, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
+        candles = fetch_history(symbol)
+        report["markets"][symbol] = {
+            "candles": len(candles),
+            "first_candle_utc": utc_text(candles[0]["t"]),
+            "last_candle_utc": utc_text(candles[-1]["t"]),
+            "strategies": run_market(symbol, candles),
+        }
+
+    with open(REPORT_FILE, "w", encoding="utf-8") as file:
+        json.dump(
+            report,
+            file,
+            ensure_ascii=False,
+            indent=2,
+        )
+
     print(f"\nReport saved to {REPORT_FILE}")
-    print("Research only. Historical performance does not predict future returns; no real orders were sent.")
+    print(
+        "Research only. Historical performance does not predict "
+        "future returns; no real orders were sent."
+    )
+
 
 if __name__ == "__main__":
     main()
