@@ -1,6 +1,6 @@
 name: Backtest V3 Walk Forward
 
-on:
+"on":
 workflow_dispatch:
 push:
 branches:
