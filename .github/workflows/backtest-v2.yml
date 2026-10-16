@@ -1,0 +1,41 @@
+name: Backtest V2 RSI Optimization
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "backtest_v2.py"
+      - ".github/workflows/backtest-v2.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backtest-v2
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run RSI optimization backtest
+        run: python -u backtest_v2.py
+
+      - name: Upload backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-v2-report
+          path: backtest_v2_report.json
+          if-no-files-found: warn
+          retention-days: 30
