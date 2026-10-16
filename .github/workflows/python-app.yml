@@ -26,6 +26,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -45,7 +47,17 @@ jobs:
 
           if git diff --cached --quiet; then
             echo "تغییری برای ذخیره وجود ندارد."
-          else
-            git commit -m "Update paper trading state"
-            git push
+            exit 0
           fi
+
+          git commit -m "Update paper trading state"
+
+          git fetch origin main
+
+          if ! git rebase origin/main; then
+            echo "خطا در هماهنگ‌سازی تغییرات؛ از بازنویسی سوابق جلوگیری شد."
+            git rebase --abort || true
+            exit 1
+          fi
+
+          git push origin HEAD:main
