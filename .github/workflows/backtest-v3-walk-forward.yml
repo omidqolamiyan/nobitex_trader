@@ -1,43 +1,43 @@
 name: Backtest V3 Walk Forward
 
 'on':
-workflow_dispatch:
-push:
-branches:
-- main
-paths:
-- 'backtest_v3.py'
-- '.github/workflows/backtest-v3-walk-forward.yml'
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backtest_v3.py'
+      - '.github/workflows/backtest-v3-walk-forward.yml'
 
 permissions:
-contents: read
+  contents: read
 
 concurrency:
-group: backtest-v3-walk-forward
-cancel-in-progress: false
+  group: backtest-v3-walk-forward
+  cancel-in-progress: false
 
 jobs:
-backtest:
-runs-on: ubuntu-latest
-timeout-minutes: 20
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
 
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  - name: Setup Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: '3.x'
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
 
-  - name: Run Walk-Forward Backtest
-    run: python -u backtest_v3.py
+      - name: Run Walk-Forward Backtest
+        run: python -u backtest_v3.py
 
-  - name: Upload Backtest V3 Report
-    if: always()
-    uses: actions/upload-artifact@v4
-    with:
-      name: backtest-v3-walk-forward-report
-      path: backtest_v3_report.json
-      if-no-files-found: warn
-      retention-days: 30
+      - name: Upload Backtest V3 Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-v3-walk-forward-report
+          path: backtest_v3_report.json
+          if-no-files-found: warn
+          retention-days: 30
