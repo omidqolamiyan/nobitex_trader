@@ -1,0 +1,43 @@
+name: Backtest V4 RSI vs EMA
+
+'on':
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backtest_v4.py'
+      - '.github/workflows/backtest-v4-comparison.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backtest-v4-comparison
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run Backtest V4
+        run: python -u backtest_v4.py
+
+      - name: Upload Backtest V4 Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-v4-comparison-report
+          path: backtest_v4_report.json
+          if-no-files-found: warn
+          retention-days: 30
