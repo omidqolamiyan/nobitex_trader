@@ -1,13 +1,13 @@
 name: Backtest V3 Walk Forward
 
-"on":
+'on':
 workflow_dispatch:
 push:
 branches:
 - main
 paths:
-- "backtest_v3.py"
-- ".github/workflows/backtest-v3-walk-forward.yml"
+- 'backtest_v3.py'
+- '.github/workflows/backtest-v3-walk-forward.yml'
 
 permissions:
 contents: read
@@ -28,7 +28,7 @@ steps:
   - name: Setup Python
     uses: actions/setup-python@v5
     with:
-      python-version: "3.x"
+      python-version: '3.x'
 
   - name: Run Walk-Forward Backtest
     run: python -u backtest_v3.py
