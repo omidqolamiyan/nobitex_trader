@@ -1,0 +1,42 @@
+name: Backtest V4.1
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "backtest_v4_1.py"
+      - ".github/workflows/backtest_v4_1.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backtest-v4-1
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run V4.1 backtest
+        run: python -u backtest_v4_1.py
+
+      - name: Upload backtest report
+        if: always() && hashFiles('backtest_v4_1_report.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-v4-1-report
+          path: backtest_v4_1_report.json
+          if-no-files-found: warn
+          retention-days: 30
