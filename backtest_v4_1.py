@@ -77,36 +77,40 @@ def fetch_chunk(symbol, start_ts, end_ts, page):
 
 
 def fetch_history(symbol, now=None):
-    """Fetch and validate history. Stops on repeated pages and rejects gaps/short data."""
+    """Fetch history in time chunks to avoid unsupported/ignored page pagination."""
     now = int(time.time()) if now is None else int(now)
     start = now - LOOKBACK_DAYS * 86400
+    step = RESOLUTION_MINUTES * 60
+    # Keep each request below common UDF response limits; 7 days = 168 hourly bars.
+    chunk_seconds = 7 * 86400
     by_ts = {}
+    cursor = start
+    chunk_no = 0
     print(f"\nFetching {symbol}: {LOOKBACK_DAYS} days, {RESOLUTION_MINUTES}m candles")
-    for page in range(1, MAX_PAGES + 1):
+    while cursor < now:
+        chunk_no += 1
+        chunk_end = min(cursor + chunk_seconds, now)
         try:
-            rows = fetch_chunk(symbol, start, now, page)
+            rows = fetch_chunk(symbol, cursor, chunk_end, 1)
         except Exception as exc:
-            raise RuntimeError(f"{symbol}: failed to fetch page {page}: {exc}") from exc
-        if not rows:
-            break
+            raise RuntimeError(f"{symbol}: failed to fetch time chunk {chunk_no}: {exc}") from exc
         before = len(by_ts)
         for row in rows:
             if start <= row["t"] <= now:
                 by_ts[row["t"]] = row
         added = len(by_ts) - before
-        print(f"{symbol}: page {page}, received {len(rows)}, new {added}, unique {len(by_ts)}")
-        # API pagination may ignore page. Do not loop forever or pretend repeated data is complete.
-        if added == 0:
-            break
-        if page < MAX_PAGES: time.sleep(REQUEST_DELAY_SECONDS)
+        print(f"{symbol}: chunk {chunk_no}, received {len(rows)}, new {added}, unique {len(by_ts)}")
+        # Advance one candle to avoid losing a candle on inclusive/exclusive API boundaries.
+        cursor = chunk_end
+        if cursor < now:
+            # Overlap the boundary by design; duplicate timestamps are deduplicated.
+            time.sleep(REQUEST_DELAY_SECONDS)
     candles = [by_ts[t] for t in sorted(by_ts)]
     expected = LOOKBACK_DAYS * 24 * 60 // RESOLUTION_MINUTES
     count_coverage = len(candles) / expected if expected else 0.0
-    span_coverage = ((candles[-1]["t"] - candles[0]["t"]) / (LOOKBACK_DAYS*86400)) if len(candles)>1 else 0.0
+    span_coverage = ((candles[-1]["t"] - candles[0]["t"]) / (LOOKBACK_DAYS * 86400)) if len(candles) > 1 else 0.0
     if len(candles) < 2:
         raise RuntimeError(f"{symbol}: API returned fewer than two valid candles")
-    # Count expected timestamps inside the requested interval; gaps are not silently ignored.
-    step = RESOLUTION_MINUTES * 60
     ts_set = set(by_ts)
     expected_in_span = max(1, (candles[-1]["t"] - candles[0]["t"]) // step + 1)
     observed_in_span = sum(1 for t in range(candles[0]["t"], candles[-1]["t"] + 1, step) if t in ts_set)
@@ -115,6 +119,10 @@ def fetch_history(symbol, now=None):
     print(f"{utc_text(candles[0]['t'])} -> {utc_text(candles[-1]['t'])}")
     if count_coverage < MIN_HISTORY_COVERAGE or span_coverage < MIN_HISTORY_COVERAGE or gap_coverage < MIN_HISTORY_COVERAGE:
         raise RuntimeError(f"{symbol}: insufficient history (count={count_coverage:.1%}, span={span_coverage:.1%}, continuity={gap_coverage:.1%}); refusing unreliable backtest")
+    # Reject irregular timestamps rather than silently treating missing hours as consecutive bars.
+    gaps = [b["t"] - a["t"] for a, b in zip(candles, candles[1:]) if b["t"] - a["t"] != step]
+    if gaps:
+        raise RuntimeError(f"{symbol}: found {len(gaps)} missing/irregular candle intervals; refusing unreliable backtest")
     return candles
 
 
@@ -167,25 +175,30 @@ def build_configurations():
 
 
 def signals_for_config(candles, config, indicators):
-    """Signal at index i is computed from candle i-1 only; execution occurs at open i."""
-    n=len(candles); buys=[False]*n; sells=[False]*n
+    """Signals use only completed prior candles; fills occur at the current candle open."""
+    n = len(candles)
+    buys = [False] * n
+    sells = [False] * n
     if config["strategy"] == "RSI":
-        vals=indicators[("RSI",config["rsi_period"])]
-        for i in range(1,n):
-            x=vals[i-1]
-            if x is None: continue
-            # Crosses reduce repeated entries while RSI remains oversold/overbought.
-            prev=vals[i-2] if i >= 2 else None
-            buys[i]=(x < config["oversold"] and (prev is None or prev >= config["oversold"]))
-            sells[i]=(x > config["overbought"] and (prev is None or prev <= config["overbought"]))
+        vals = indicators[("RSI", config["rsi_period"])]
+        for i in range(1, n):
+            previous, current = vals[i - 2] if i >= 2 else None, vals[i - 1]
+            if previous is None or current is None:
+                continue
+            # Mean-reversion entry: RSI recovers back above oversold.
+            buys[i] = previous < config["oversold"] and current >= config["oversold"]
+            # Exit: RSI falls back below overbought.
+            sells[i] = previous > config["overbought"] and current <= config["overbought"]
     else:
-        f=indicators[("EMA",config["ema_fast"])]; s=indicators[("EMA",config["ema_slow"])]
-        for i in range(1,n):
-            j=i-1
-            if j<1 or f[j] is None or s[j] is None or f[j-1] is None or s[j-1] is None: continue
-            buys[i]=(f[j] > s[j] and f[j-1] <= s[j-1])
-            sells[i]=(f[j] < s[j] and f[j-1] >= s[j-1])
-    return buys,sells
+        fast = indicators[("EMA", config["ema_fast"])]
+        slow = indicators[("EMA", config["ema_slow"])]
+        for i in range(1, n):
+            j = i - 1
+            if j < 1 or fast[j] is None or slow[j] is None or fast[j-1] is None or slow[j-1] is None:
+                continue
+            buys[i] = fast[j] > slow[j] and fast[j-1] <= slow[j-1]
+            sells[i] = fast[j] < slow[j] and fast[j-1] >= slow[j-1]
+    return buys, sells
 
 
 def execute_buy(cash, reference_price):
@@ -206,65 +219,147 @@ def execute_sell(qty, reference_price):
 
 
 def simulate(candles, buys, sells, start, end, stop_loss, take_profit, liquidate=True):
-    """Fresh cash for every independent segment; end index is exclusive."""
-    start=max(1,int(start)); end=min(int(end),len(candles))
-    cash=INITIAL_CAPITAL; qty=0.0; entry_price=None; entry_cost=0.0
-    entries=closed=wins=losses=0; curve=[]; trades=[]
-    if start>=end: return {"final_equity":INITIAL_CAPITAL,"return_pct":0.0,"entries":0,"closed_trades":0,"wins":0,"losses":0,"win_rate_pct":0.0,"max_drawdown_pct":0.0,"trade_log":[]}
-    for i in range(start,end):
-        c=candles[i]; open_px=c["o"]
-        if qty>0:
-            stop=entry_price*(1-stop_loss); target=entry_price*(1+take_profit)
-            exit_px=None; reason=None
-            # Conservative OHLC assumption: if stop and target both hit, stop wins.
-            # Gaps execute at open, not at the unavailable stop/target price.
-            if open_px <= stop: exit_px=open_px; reason="STOP_GAP"
-            elif open_px >= target: exit_px=open_px; reason="TARGET_GAP"
-            elif c["l"] <= stop: exit_px=stop; reason="STOP_LOSS"
-            elif c["h"] >= target: exit_px=target; reason="TAKE_PROFIT"
-            elif sells[i]: exit_px=open_px; reason="SIGNAL"
+    """Simulate one isolated segment, including entry-bar stops and conservative drawdown."""
+    start = max(1, int(start))
+    end = min(int(end), len(candles))
+    cash = INITIAL_CAPITAL
+    qty = 0.0
+    entry_price = None
+    entry_cost = 0.0
+    entry_time = None
+    entries = closed = wins = losses = 0
+    curve = []
+    trades = []
+    if start >= end:
+        return {"initial_capital": INITIAL_CAPITAL, "final_equity": INITIAL_CAPITAL, "return_pct": 0.0,
+                "entries": 0, "closed_trades": 0, "wins": 0, "losses": 0, "win_rate_pct": 0.0,
+                "max_drawdown_pct": 0.0, "trade_log": []}
+
+    peak = INITIAL_CAPITAL
+    max_dd = 0.0
+    for i in range(start, end):
+        c = candles[i]
+        open_px = c["o"]
+        # Mark low-water equity from any position carried into this candle before processing exits.
+        low_candidates = [cash + qty * c["l"] if qty > 0 else cash]
+        exited_this_bar = False
+
+        if qty > 0:
+            stop = entry_price * (1 - stop_loss)
+            target = entry_price * (1 + take_profit)
+            exit_px = None
+            reason = None
+            if open_px <= stop:
+                exit_px, reason = open_px, "STOP_GAP"
+            elif open_px >= target:
+                exit_px, reason = open_px, "TARGET_GAP"
+            elif c["l"] <= stop and c["h"] >= target:
+                # Unknown intrabar path: assume adverse stop was hit first.
+                exit_px, reason = stop, "STOP_AND_TARGET_SAME_BAR_STOP_FIRST"
+            elif c["l"] <= stop:
+                exit_px, reason = stop, "STOP_LOSS"
+            elif c["h"] >= target:
+                exit_px, reason = target, "TAKE_PROFIT"
+            elif sells[i]:
+                exit_px, reason = open_px, "SIGNAL"
             if exit_px is not None:
-                proceeds,fill=execute_sell(qty,exit_px); pnl=proceeds-entry_cost
-                closed+=1; wins+=int(pnl>0); losses+=int(pnl<=0)
-                trades.append({"entry_time":entry_time,"exit_time":c["t"],"entry_price":entry_price,"exit_price":fill,"reason":reason,"entry_cost":round(entry_cost,8),"proceeds":round(proceeds,8),"pnl":round(pnl,8)})
-                cash=proceeds; qty=0.0; entry_price=None; entry_cost=0.0; entry_time=None
-        # Do not enter again in the same bar after an exit; signal at this bar's open was known before it opened, but same-bar re-entry makes intrabar ordering ambiguous.
-        elif cash >= MIN_BUY_CASH and buys[i]:
-            cash,qty,entry_price,entry_cost=execute_buy(cash,open_px)
-            if qty>0:
-                entries+=1; entry_time=c["t"]
-        # Mark-to-market at close, and include conservative intrabar low-water equity for DD.
-        close_equity=cash+qty*c["c"]
-        low_equity=cash+qty*c["l"]
-        curve.append({"t":c["t"],"close":close_equity,"low":low_equity})
-    if qty>0 and liquidate:
-        proceeds,fill=execute_sell(qty,candles[end-1]["c"]); pnl=proceeds-entry_cost
-        closed+=1; wins+=int(pnl>0); losses+=int(pnl<=0)
-        trades.append({"entry_time":entry_time,"exit_time":candles[end-1]["t"],"entry_price":entry_price,"exit_price":fill,"reason":"END_OF_SEGMENT","entry_cost":round(entry_cost,8),"proceeds":round(proceeds,8),"pnl":round(pnl,8)})
-        cash=proceeds; qty=0.0
-        if curve: curve[-1]["close"]=cash; curve[-1]["low"]=min(curve[-1]["low"],cash)
-    final_equity=(curve[-1]["close"] if curve else INITIAL_CAPITAL)
-    peak=INITIAL_CAPITAL; max_dd=0.0
-    for point in curve:
-        peak=max(peak,point["close"])
-        # Conservative drawdown uses each candle's low equity, not just close.
-        dd=(peak-point["low"])/peak if peak>0 else 0.0
-        max_dd=max(max_dd,dd)
-    return {"initial_capital":INITIAL_CAPITAL,"final_equity":round(final_equity,8),"return_pct":round((final_equity/INITIAL_CAPITAL-1)*100,4),"entries":entries,"closed_trades":closed,"wins":wins,"losses":losses,"win_rate_pct":round(wins/closed*100,2) if closed else 0.0,"max_drawdown_pct":round(max_dd*100,4),"trade_log":trades}
+                proceeds, fill = execute_sell(qty, exit_px)
+                pnl = proceeds - entry_cost
+                closed += 1
+                wins += int(pnl > 0)
+                losses += int(pnl <= 0)
+                trades.append({"entry_time": entry_time, "exit_time": c["t"], "entry_price": round(entry_price, 8),
+                               "exit_price": round(fill, 8), "reason": reason, "entry_cost": round(entry_cost, 8),
+                               "proceeds": round(proceeds, 8), "pnl": round(pnl, 8)})
+                cash, qty, entry_price, entry_cost, entry_time = proceeds, 0.0, None, 0.0, None
+                exited_this_bar = True
+
+        if qty == 0 and not exited_this_bar and cash >= MIN_BUY_CASH and buys[i]:
+            cash, qty, entry_price, entry_cost = execute_buy(cash, open_px)
+            if qty > 0:
+                entries += 1
+                entry_time = c["t"]
+                # Evaluate stop/target on the entry candle too. Entry is at the open;
+                # if both thresholds are touched, conservatively assume stop first.
+                stop = entry_price * (1 - stop_loss)
+                target = entry_price * (1 + take_profit)
+                exit_px = None
+                reason = None
+                if c["l"] <= stop and c["h"] >= target:
+                    exit_px, reason = stop, "ENTRY_BAR_STOP_AND_TARGET_STOP_FIRST"
+                elif c["l"] <= stop:
+                    exit_px, reason = stop, "ENTRY_BAR_STOP_LOSS"
+                elif c["h"] >= target:
+                    exit_px, reason = target, "ENTRY_BAR_TAKE_PROFIT"
+                if exit_px is not None:
+                    proceeds, fill = execute_sell(qty, exit_px)
+                    pnl = proceeds - entry_cost
+                    closed += 1
+                    wins += int(pnl > 0)
+                    losses += int(pnl <= 0)
+                    trades.append({"entry_time": entry_time, "exit_time": c["t"], "entry_price": round(entry_price, 8),
+                                   "exit_price": round(fill, 8), "reason": reason, "entry_cost": round(entry_cost, 8),
+                                   "proceeds": round(proceeds, 8), "pnl": round(pnl, 8)})
+                    cash, qty, entry_price, entry_cost, entry_time = proceeds, 0.0, None, 0.0, None
+
+        # Low-water equity includes intrabar low while any position was open, including entry bars.
+        if qty > 0:
+            low_candidates.append(cash + qty * c["l"])
+        close_equity = cash + qty * c["c"]
+        low_equity = min(low_candidates + [close_equity])
+        peak = max(peak, close_equity)
+        if peak > 0:
+            max_dd = max(max_dd, (peak - low_equity) / peak)
+        curve.append({"t": c["t"], "close": close_equity, "low": low_equity})
+
+    if qty > 0 and liquidate:
+        last = candles[end - 1]
+        proceeds, fill = execute_sell(qty, last["c"])
+        pnl = proceeds - entry_cost
+        closed += 1
+        wins += int(pnl > 0)
+        losses += int(pnl <= 0)
+        trades.append({"entry_time": entry_time, "exit_time": last["t"], "entry_price": round(entry_price, 8),
+                       "exit_price": round(fill, 8), "reason": "END_OF_SEGMENT", "entry_cost": round(entry_cost, 8),
+                       "proceeds": round(proceeds, 8), "pnl": round(pnl, 8)})
+        cash, qty = proceeds, 0.0
+        if curve:
+            curve[-1]["close"] = cash
+            curve[-1]["low"] = min(curve[-1]["low"], cash)
+            peak = max(peak, cash)
+            if peak > 0:
+                max_dd = max(max_dd, (peak - curve[-1]["low"]) / peak)
+
+    final_equity = curve[-1]["close"] if curve else INITIAL_CAPITAL
+    return {"initial_capital": INITIAL_CAPITAL, "final_equity": round(final_equity, 8),
+            "return_pct": round((final_equity / INITIAL_CAPITAL - 1) * 100, 4), "entries": entries,
+            "closed_trades": closed, "wins": wins, "losses": losses,
+            "win_rate_pct": round(wins / closed * 100, 2) if closed else 0.0,
+            "max_drawdown_pct": round(max_dd * 100, 4), "trade_log": trades}
 
 
-def buy_and_hold(candles,start,end):
-    start=max(0,start); end=min(end,len(candles))
-    if start>=end: return {"final_equity":INITIAL_CAPITAL,"return_pct":0.0,"max_drawdown_pct":0.0}
-    cash,qty,entry,entry_cost=execute_buy(INITIAL_CAPITAL,candles[start]["o"])
-    curve=[]
-    for c in candles[start:end]: curve.append({"close":cash+qty*c["c"],"low":cash+qty*c["l"]})
-    proceeds,_=execute_sell(qty,candles[end-1]["c"])
-    if curve: curve[-1]["close"]=proceeds; curve[-1]["low"]=min(curve[-1]["low"],proceeds)
-    peak=INITIAL_CAPITAL; dd=0.0
-    for point in curve:
-        peak=max(peak,point["close"]); dd=max(dd,(peak-point["low"])/peak if peak else 0.0)
-    return {"final_equity":round(proceeds,8),"return_pct":round((proceeds/INITIAL_CAPITAL-1)*100,4),"max_drawdown_pct":round(dd*100,4)}
+def buy_and_hold(candles, start, end):
+    start = max(0, int(start))
+    end = min(int(end), len(candles))
+    if start >= end:
+        return {"final_equity": INITIAL_CAPITAL, "return_pct": 0.0, "max_drawdown_pct": 0.0}
+    cash, qty, entry, entry_cost = execute_buy(INITIAL_CAPITAL, candles[start]["o"])
+    peak = INITIAL_CAPITAL
+    max_dd = 0.0
+    for i in range(start, end):
+        c = candles[i]
+        close_equity = cash + qty * c["c"]
+        # Candle low is a conservative mark; on the entry candle it may precede the open,
+        # so report it as conservative rather than claiming exact intrabar chronology.
+        low_equity = cash + qty * c["l"]
+        peak = max(peak, close_equity)
+        if peak > 0:
+            max_dd = max(max_dd, (peak - low_equity) / peak)
+    proceeds, _ = execute_sell(qty, candles[end - 1]["c"])
+    final_equity = proceeds
+    return {"final_equity": round(final_equity, 8),
+            "return_pct": round((final_equity / INITIAL_CAPITAL - 1) * 100, 4),
+            "max_drawdown_pct": round(max_dd * 100, 4)}
 
 
 def score_result(result):
@@ -324,10 +419,17 @@ def test_market(symbol,candles):
     # Concatenate fold OOS returns by compounding segment returns, not summing percentages.
     compounded=INITIAL_CAPITAL
     oos_trades=0; oos_wins=0; fold_returns=[]
-    for item in selected_oos:
-        result=item["result"]; compounded *= result["final_equity"]/INITIAL_CAPITAL
-        oos_trades += result["closed_trades"]; oos_wins += result["wins"]
-        fold_returns.append(result["return_pct"])
+    selected_by_start={item["start"]:item["result"] for item in selected_oos}
+    for f in folds:
+        # Every OOS fold contributes the same calendar interval. If no model qualified,
+        # strategy capital remains in cash for that fold (0% return), not omitted.
+        ts = next((i for i in range(1, len(candles)) if utc_text(candles[i]["t"]) == f["test_start_utc"]), None)
+        result = selected_by_start.get(ts) if ts is not None else None
+        if result is not None:
+            compounded *= result["final_equity"]/INITIAL_CAPITAL
+            oos_trades += result["closed_trades"]
+            oos_wins += result["wins"]
+            fold_returns.append(result["return_pct"])
     benchmark=INITIAL_CAPITAL
     for f in folds:
         b=f["buy_and_hold_oos"]
@@ -350,12 +452,23 @@ def run_self_tests():
     # Position must close by end of segment and cash must be finite.
     out=simulate(cs,buys,sells,1,5,0.015,0.03)
     assert math.isfinite(out["final_equity"]) and out["final_equity"] > 0
+    # A stop touched in the entry candle must close on that same candle.
+    spiky=[{"t":i*3600,"o":100.0,"h":101.0,"l":99.0,"c":100.0} for i in range(5)]
+    spiky[1]={"t":3600,"o":100.0,"h":104.0,"l":97.0,"c":101.0}
+    b=[False]*5; se=[False]*5; b[1]=True
+    out2=simulate(spiky,b,se,1,2,0.02,0.03)
+    assert out2["closed_trades"] == 1 and out2["trade_log"][0]["reason"] == "ENTRY_BAR_STOP_AND_TARGET_STOP_FIRST"
+    # RSI buy signal must occur on recovery above oversold, not on the drop below it.
+    ind={("RSI", 7): [None, 35.0, 25.0, 19.0, 22.0, 28.0]}
+    cfg={"strategy":"RSI","rsi_period":7,"oversold":20,"overbought":70}
+    b2,s2=signals_for_config([{"t":i,"o":1,"h":1,"l":1,"c":1} for i in range(6)],cfg,ind)
+    assert b2[5] is True and b2[4] is False
     print("Self-tests: PASS")
 
 
 def main():
     run_self_tests()
-    report={"created_utc":datetime.now(timezone.utc).isoformat(),"version":"4.1","simulation_only":True,"real_orders_enabled":False,"lookback_days":LOOKBACK_DAYS,"resolution_minutes":RESOLUTION_MINUTES,"initial_capital_per_independent_test":INITIAL_CAPITAL,"fee_rate_per_side":FEE_RATE,"slippage_rate_per_side":SLIPPAGE_RATE,"markets":{}}
+    report={"created_utc":datetime.now(timezone.utc).isoformat(),"version":"4.1.1","history_fetch_method":"7-day time chunks; no page-number assumption","simulation_only":True,"real_orders_enabled":False,"lookback_days":LOOKBACK_DAYS,"resolution_minutes":RESOLUTION_MINUTES,"initial_capital_per_independent_test":INITIAL_CAPITAL,"fee_rate_per_side":FEE_RATE,"slippage_rate_per_side":SLIPPAGE_RATE,"markets":{}}
     print("NOBITEX BACKTEST V4.1 — SIMULATION ONLY; NO REAL ORDERS")
     print(f"Capital={INITIAL_CAPITAL:.2f} USDT | fee/side={FEE_RATE:.3%} | slippage/side={SLIPPAGE_RATE:.3%}")
     for symbol in MARKETS:
