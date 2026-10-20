@@ -8,6 +8,7 @@ Outputs: backtest_v4_1_report.json
 import json
 import math
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -37,6 +38,8 @@ TEST_DAYS = 14
 MIN_HISTORY_COVERAGE = 0.95
 MAX_PAGES = 50
 REQUEST_DELAY_SECONDS = 2.1
+MAX_FETCH_ATTEMPTS = 4
+RETRY_BASE_SECONDS = 2.0
 REPORT_FILE = "backtest_v4_1_report.json"
 
 
@@ -56,9 +59,27 @@ def fetch_chunk(symbol, start_ts, end_ts, page):
               "from": int(start_ts), "to": int(end_ts), "page": int(page)}
     req = urllib.request.Request(
         API_URL + "?" + urllib.parse.urlencode(params),
-        headers={"User-Agent": "Nobitex-Backtest-V4.1/1.0", "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as response:
-        data = json.loads(response.read().decode("utf-8"))
+        headers={"User-Agent": "Nobitex-Backtest-V4.1.2/1.0", "Accept": "application/json"})
+    # Temporary Nobitex/CDN failures (for example HTTP 504) should not
+    # abort a multi-minute history download on the first attempt.
+    last_error = None
+    for attempt in range(MAX_FETCH_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            retryable = exc.code in (408, 429, 500, 502, 503, 504)
+            if not retryable or attempt == MAX_FETCH_ATTEMPTS - 1:
+                raise
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt == MAX_FETCH_ATTEMPTS - 1:
+                raise
+        time.sleep(RETRY_BASE_SECONDS * (2 ** attempt))
+    else:
+        raise RuntimeError(f"{symbol}: history request failed after retries: {last_error}")
     if data.get("s") == "no_data":
         return []
     if data.get("s") != "ok":
@@ -100,10 +121,12 @@ def fetch_history(symbol, now=None):
                 by_ts[row["t"]] = row
         added = len(by_ts) - before
         print(f"{symbol}: chunk {chunk_no}, received {len(rows)}, new {added}, unique {len(by_ts)}")
-        # Advance one candle to avoid losing a candle on inclusive/exclusive API boundaries.
-        cursor = chunk_end
+        # Re-fetch one candle at each boundary. This protects against inclusive vs.
+        # exclusive API endpoints; duplicate timestamps are deduplicated in by_ts.
+        cursor = chunk_end - step
+        if cursor < start:
+            cursor = start
         if cursor < now:
-            # Overlap the boundary by design; duplicate timestamps are deduplicated.
             time.sleep(REQUEST_DELAY_SECONDS)
     candles = [by_ts[t] for t in sorted(by_ts)]
     expected = LOOKBACK_DAYS * 24 * 60 // RESOLUTION_MINUTES
@@ -447,6 +470,14 @@ def run_self_tests():
     assert cash >= 0 and qty > 0 and abs(cost-5.0) < 1e-9 and fill > 100
     proceeds,sfill=execute_sell(qty,100.0)
     assert proceeds < cost and sfill < 100
+    # Round-trip cost must include both sides' fees and slippage.
+    expected_buy_fill = 100.0 * (1 + SLIPPAGE_RATE)
+    expected_qty = (5.0 / (1 + FEE_RATE)) / expected_buy_fill
+    assert abs(qty - expected_qty) < 1e-12
+    assert abs(cost - 5.0) < 1e-9
+    flat_rsi = calculate_rsi([10.0] * 8, 3)
+    assert flat_rsi[3] == 50.0
+    assert len(build_configurations()) == 324
     cs=[{"t":i*3600,"o":100.0,"h":101.0,"l":99.0,"c":100.0} for i in range(5)]
     buys=[False]*5; sells=[False]*5; buys[1]=True
     # Position must close by end of segment and cash must be finite.
@@ -468,7 +499,7 @@ def run_self_tests():
 
 def main():
     run_self_tests()
-    report={"created_utc":datetime.now(timezone.utc).isoformat(),"version":"4.1.1","history_fetch_method":"7-day time chunks; no page-number assumption","simulation_only":True,"real_orders_enabled":False,"lookback_days":LOOKBACK_DAYS,"resolution_minutes":RESOLUTION_MINUTES,"initial_capital_per_independent_test":INITIAL_CAPITAL,"fee_rate_per_side":FEE_RATE,"slippage_rate_per_side":SLIPPAGE_RATE,"markets":{}}
+    report={"created_utc":datetime.now(timezone.utc).isoformat(),"version":"4.1.2","history_fetch_method":"7-day time chunks with one-candle overlap, deduplication, and transient-error retries","simulation_only":True,"real_orders_enabled":False,"lookback_days":LOOKBACK_DAYS,"resolution_minutes":RESOLUTION_MINUTES,"initial_capital_per_independent_test":INITIAL_CAPITAL,"fee_rate_per_side":FEE_RATE,"slippage_rate_per_side":SLIPPAGE_RATE,"markets":{}}
     print("NOBITEX BACKTEST V4.1 — SIMULATION ONLY; NO REAL ORDERS")
     print(f"Capital={INITIAL_CAPITAL:.2f} USDT | fee/side={FEE_RATE:.3%} | slippage/side={SLIPPAGE_RATE:.3%}")
     for symbol in MARKETS:
