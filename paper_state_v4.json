@@ -5,18 +5,18 @@
   "strategies": {
     "TREND": {
       "BTCUSDT": {
-        "cash": 1.0978779164244106,
-        "qty": 0.0,
-        "entry_price": 0.0,
-        "entry_cost": 0.0,
-        "last_candle": 1792614600
+        "cash": 0.0,
+        "qty": 1.2984471464578349e-05,
+        "entry_price": 84443.37,
+        "entry_cost": 1.0978779164244106,
+        "last_candle": 1792615800
       },
       "ETHUSDT": {
         "cash": 1.1114857580749693,
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1792614600
+        "last_candle": 1792615800
       }
     },
     "REVERSAL": {
@@ -25,14 +25,14 @@
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1792614600
+        "last_candle": 1792615800
       },
       "ETHUSDT": {
         "cash": 1.2582386913765085,
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1792614600
+        "last_candle": 1792615800
       }
     }
   },
@@ -1656,6 +1656,16 @@
       "qty": 0.0004469501017712468,
       "pnl": 0.011906230014317343,
       "reason": "ضعف تأییدشده روند"
+    },
+    {
+      "time_utc": "2026-10-21T20:57:14.665590+00:00",
+      "strategy": "TREND",
+      "symbol": "BTCUSDT",
+      "side": "BUY",
+      "price": 84443.37,
+      "qty": 1.2984471464578349e-05,
+      "pnl": 0.0,
+      "reason": "روند صعودی تأییدشده و RSI مناسب"
     }
   ]
 }
