@@ -1,0 +1,60 @@
+name: Unified Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Historical lookback days"
+        required: true
+        default: "180"
+      resolution:
+        description: "Candle timeframe in minutes"
+        required: true
+        default: "60"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unified-backtest
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Check Python syntax
+        run: python -m py_compile backtest_unified.py
+
+      - name: Run built-in self-tests
+        run: python backtest_unified.py --self-test
+
+      - name: Run historical backtest
+        run: >-
+          python backtest_unified.py
+          --days "${{ inputs.days }}"
+          --resolution "${{ inputs.resolution }}"
+          --capital 5
+          --fee 0.0013
+          --slippage 0.0005
+          --symbols BTCUSDT ETHUSDT
+          --report backtest_unified_report.json
+
+      - name: Upload backtest report
+        if: always() && hashFiles('backtest_unified_report.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-unified-report
+          path: backtest_unified_report.json
+          if-no-files-found: warn
+          retention-days: 30
