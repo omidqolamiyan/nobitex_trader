@@ -1,51 +1,51 @@
 name: Profitable Only Backtest
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 permissions:
-contents: read
+  contents: read
 
 concurrency:
-group: profitable-only-backtest
-cancel-in-progress: false
+  group: profitable-only-backtest
+  cancel-in-progress: false
 
 jobs:
-backtest:
-name: Run Profitable-Only Backtest
-runs-on: ubuntu-latest
-timeout-minutes: 15
+  backtest:
+    name: Run Profitable-Only Backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
-  - name: Set up Python
-    uses: actions/setup-python@v6
-    with:
-      python-version: "3.12"
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
-  - name: Check Python syntax
-    run: python -m py_compile backtest_profitable_only.py
+      - name: Check Python syntax
+        run: python -m py_compile backtest_profitable_only.py
 
-  - name: Run self-tests
-    run: python backtest_profitable_only.py --self-test
+      - name: Run self-tests
+        run: python backtest_profitable_only.py --self-test
 
-  - name: Run profitable-only backtest
-    run: |
-      python backtest_profitable_only.py \
-        --days 180 \
-        --resolution 60 \
-        --capital 5 \
-        --fee 0.0013 \
-        --slippage 0.0005 \
-        --symbols BTCUSDT ETHUSDT \
-        --report backtest_profitable_only_report.json
+      - name: Run profitable-only backtest
+        run: |
+          python backtest_profitable_only.py \
+            --days 180 \
+            --resolution 60 \
+            --capital 5 \
+            --fee 0.0013 \
+            --slippage 0.0005 \
+            --symbols BTCUSDT ETHUSDT \
+            --report backtest_profitable_only_report.json
 
-  - name: Upload backtest report
-    if: always() && hashFiles('backtest_profitable_only_report.json') != ''
-    uses: actions/upload-artifact@v4
-    with:
-      name: profitable-only-backtest-report
-      path: backtest_profitable_only_report.json
-      retention-days: 30
+      - name: Upload backtest report
+        if: always() && hashFiles('backtest_profitable_only_report.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: profitable-only-backtest-report
+          path: backtest_profitable_only_report.json
+          retention-days: 30
