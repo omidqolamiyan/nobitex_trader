@@ -1,0 +1,78 @@
+name: Profitable Only Backtest
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: profitable-only-backtest
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Check Python syntax
+        run: python -m py_compile backtest_profitable_only.py
+
+      - name: Run self-tests
+        run: python backtest_profitable_only.py --self-test
+
+      - name: Run profitable-only backtest
+        run: |
+          python backtest_profitable_only.py \
+            --days 180 \
+            --resolution 60 \
+            --capital 5 \
+            --fee 0.0013 \
+            --slippage 0.0005 \
+            --symbols BTCUSDT ETHUSDT \
+            --report backtest_profitable_only_report.json
+
+      - name: Upload backtest report
+        if: always() && hashFiles('backtest_profitable_only_report.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: profitable-only-backtest-report
+          path: backtest_profitable_only_report.json
+          retention-days: 30
+:::
+
+### ۴. فایل را ذخیره کن
+
+در GitHub روی **Commit changes** بزن و تأیید کن.
+
+### ۵. بک‌تست را اجرا کن
+
+وارد بخش [GitHub Actions پروژه](https://github.com/omidqolamiyan/nobitex_trader/actions) شو.
+
+سپس:
+
+1. Workflow با نام **Profitable Only Backtest** را پیدا کن.
+2. روی **Run workflow** بزن.
+3. دوباره **Run workflow** را انتخاب کن.
+4. منتظر بمان تا اجرا تمام شود.
+
+## بعد از اجرا چه کنیم؟
+
+وقتی اجرا سبز شد، وارد همان اجرای موفق شو و گزارش `profitable-only-backtest-report` را از بخش **Artifacts** دانلود کن.
+
+گزارش را برای من بفرست تا بررسی کنیم:
+- کدام استراتژی‌ها شرایط تعیین‌شده را گذرانده‌اند؛
+- کدام‌ها باید کنار گذاشته شوند؛
+- آیا تعداد معاملات برای اعتماد به نتیجه کافی است؛
+- آیا ایراد یا محدودیتی در نتایج وجود دارد.
+
+**نکتهٔ مهم:** این Workflow فقط بک‌تست انجام می‌دهد و هیچ معاملهٔ واقعی ثبت نمی‌کند. حتی اگر استراتژی‌ای تأیید شود، تا زمان بررسی نتایج، فایل `bot.py` را تغییر نمی‌دهیم.
