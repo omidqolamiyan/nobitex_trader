@@ -9,14 +9,14 @@
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1792765200
+        "last_candle": 1792767300
       },
       "ETHUSDT": {
-        "cash": 1.0464558776737376,
-        "qty": 0.0,
-        "entry_price": 0.0,
-        "entry_cost": 0.0,
-        "last_candle": 1792765200
+        "cash": 0.0,
+        "qty": 0.0004345916263637905,
+        "entry_price": 2404.78,
+        "entry_cost": 1.0464558776737376,
+        "last_candle": 1792767300
       }
     },
     "REVERSAL": {
@@ -25,14 +25,14 @@
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1792765200
+        "last_candle": 1792767300
       },
       "ETHUSDT": {
         "cash": 1.2582386913765085,
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1792765200
+        "last_candle": 1792767300
       }
     }
   },
@@ -2076,6 +2076,16 @@
       "qty": 0.000438479968333237,
       "pnl": -0.009459353788691338,
       "reason": "ضعف تأییدشده روند"
+    },
+    {
+      "time_utc": "2026-10-23T15:03:13.790028+00:00",
+      "strategy": "TREND",
+      "symbol": "ETHUSDT",
+      "side": "BUY",
+      "price": 2404.78,
+      "qty": 0.0004345916263637905,
+      "pnl": 0.0,
+      "reason": "روند صعودی تأییدشده و RSI مناسب"
     }
   ]
 }
