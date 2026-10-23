@@ -1,6 +1,6 @@
 name: Profitable Only Backtest
 
-"on":
+on:
 workflow_dispatch:
 
 permissions:
