@@ -13,7 +13,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 API_URL = "https://apiv2.nobitex.ir/market/udf/history"
 REPORT_FILE = "backtest_unified_report.json"
 INITIAL_CAPITAL = 5.0
@@ -195,10 +195,26 @@ def fetch_candles(symbol, days=DAYS, resolution=RESOLUTION):
     # Reject future/out-of-range data and identify obvious interval alignment issues.
     if any(c.t < start or c.t >= end_exclusive for c in candles):
         raise RuntimeError("API returned candles outside the requested time range")
-    misaligned = [c.t for c in candles if c.t % sec != 0]
+    # Do not assume candle opens must be divisible by the interval relative to
+    # Unix epoch. Some UDF feeds use a consistent offset (for example :30 for
+    # hourly candles). Validate the grid relative to the first returned candle,
+    # and separately report gaps instead of rejecting a consistent offset.
+    phase = candles[0].t % sec
+    misaligned = [c.t for c in candles if (c.t - candles[0].t) % sec != 0]
     if misaligned:
-        raise RuntimeError(f"Received {len(misaligned)} candles not aligned to {resolution} interval")
-    print(f"{symbol}: fetched {len(candles)} candles using {request_count} time-window requests")
+        examples = ", ".join(utc(ts) for ts in misaligned[:3])
+        raise RuntimeError(
+            f"{len(misaligned)} candles do not follow a consistent {resolution}-interval grid; "
+            f"examples: {examples}"
+        )
+    gaps = sum(
+        max(0, (candles[i].t - candles[i - 1].t) // sec - 1)
+        for i in range(1, len(candles))
+    )
+    print(
+        f"{symbol}: fetched {len(candles)} candles using {request_count} time-window requests; "
+        f"grid_offset={phase}s; missing_intervals={gaps}"
+    )
     return candles
 
 
@@ -557,6 +573,11 @@ def self_test():
         signals = prepare_signals(flat, cfg)
         assert all(signals[i] == signal_at(flat, i, cfg) for i in range(len(flat)))
 
+    # Candle timestamps may have a consistent offset from Unix-epoch boundaries.
+    shifted_hourly = [Candle(base + 1800 + i * 3600, 100, 101, 99, 100) for i in range(20)]
+    assert all((c.t - shifted_hourly[0].t) % 3600 == 0 for c in shifted_hourly)
+    assert any(c.t % 3600 != 0 for c in shifted_hourly)
+
     # A full test fold is required; an incomplete trailing fold must be ignored.
     hourly = [Candle(base + i * 3600, 100, 101, 99, 100) for i in range(60 * 24 + 5)]
     assert len(split_folds(hourly, "60")) == 0
@@ -565,7 +586,8 @@ def self_test():
         "checks": [
             "EMA warm-up", "RSI monotonic rise", "fees/slippage reduce flat buy-and-hold",
             "finite equity curve", "equity curve length", "same-candle stop/target conservatism",
-            "precomputed signals match direct signals", "incomplete OOS fold is ignored",
+            "precomputed signals match direct signals", "consistent offset candle grid accepted",
+            "incomplete OOS fold is ignored",
         ],
         "conservative_stop_rule": "stop wins if stop and target both touched in one candle",
     }
