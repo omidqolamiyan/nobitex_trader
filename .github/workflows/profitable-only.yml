@@ -15,25 +15,21 @@ backtest:
 name: Run Profitable-Only Backtest
 runs-on: ubuntu-latest
 timeout-minutes: 15
-
 steps:
-  # 1. Prepare the environment
-  - name: Checkout repository
-    uses: actions/checkout@v5
+- name: Checkout repository
+uses: actions/checkout@v5
 
   - name: Set up Python
     uses: actions/setup-python@v6
     with:
       python-version: "3.12"
 
-  # 2. Validate the script
   - name: Check Python syntax
     run: python -m py_compile backtest_profitable_only.py
 
   - name: Run self-tests
     run: python backtest_profitable_only.py --self-test
 
-  # 3. Run the backtest
   - name: Run profitable-only backtest
     run: |
       python backtest_profitable_only.py \
@@ -45,7 +41,6 @@ steps:
         --symbols BTCUSDT ETHUSDT \
         --report backtest_profitable_only_report.json
 
-  # 4. Publish the report
   - name: Upload backtest report
     if: always() && hashFiles('backtest_profitable_only_report.json') != ''
     uses: actions/upload-artifact@v4
