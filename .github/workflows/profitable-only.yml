@@ -20,11 +20,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Set up Python
+            - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-          cache: false
 
       - name: Check Python syntax
         run: python -m py_compile backtest_profitable_only.py
