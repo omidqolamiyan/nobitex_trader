@@ -1,43 +1,54 @@
 name: Profitable Only Backtest
 
 on:
-  workflow_dispatch:
+workflow_dispatch:
 
 permissions:
-  contents: read
+contents: read
 
 concurrency:
-  group: profitable-only-backtest
-  cancel-in-progress: false
+group: profitable-only-backtest
+cancel-in-progress: false
 
 jobs:
-  backtest:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
+backtest:
+name: Run Profitable-Only Backtest
+runs-on: ubuntu-latest
+timeout-minutes: 25
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: false
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v5
 
-      - name: Check Python syntax
-        run: python -m py_compile backtest_profitable_only.py
+  - name: Set up Python
+    uses: actions/setup-python@v6
+    with:
+      python-version: '3.12'
+      cache: false
 
-      - name: Run self-tests
-        run: python -u backtest_profitable_only.py --self-test
+  - name: Check Python syntax
+    run: python -m py_compile backtest_profitable_only.py
 
-      - name: Run 180-day BTC and ETH walk-forward backtest
-        run: python -u backtest_profitable_only.py
+  - name: Run self-tests
+    run: python -u backtest_profitable_only.py --self-test
 
-      - name: Upload backtest report
-        if: always() && hashFiles('backtest_profitable_only_report.json') != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: backtest-profitable-only-report
-          path: backtest_profitable_only_report.json
-          if-no-files-found: error
-          retention-days: 30
+  - name: Run 180-day BTC and ETH walk-forward backtest
+    run: |
+      python -u backtest_profitable_only.py \
+        --days 180 \
+        --resolution 60 \
+        --capital 5 \
+        --buy-fraction 0.75 \
+        --fee 0.0013 \
+        --slippage 0.0005 \
+        --symbols BTCUSDT ETHUSDT \
+        --report backtest_profitable_only_report.json
+
+  - name: Upload backtest report
+    if: always() && hashFiles('backtest_profitable_only_report.json') != ''
+    uses: actions/upload-artifact@v4
+    with:
+      name: backtest-profitable-only-report
+      path: backtest_profitable_only_report.json
+      if-no-files-found: error
+      retention-days: 30
