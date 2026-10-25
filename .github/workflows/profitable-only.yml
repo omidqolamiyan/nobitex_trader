@@ -12,10 +12,8 @@ concurrency:
 
 jobs:
   backtest:
-    name: Run Profitable-Only Backtest
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -23,29 +21,23 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: '3.12'
+          cache: false
 
       - name: Check Python syntax
         run: python -m py_compile backtest_profitable_only.py
 
       - name: Run self-tests
-        run: python backtest_profitable_only.py --self-test
+        run: python -u backtest_profitable_only.py --self-test
 
-      - name: Run profitable-only backtest
-        run: |
-          python backtest_profitable_only.py \
-            --days 180 \
-            --resolution 60 \
-            --capital 5 \
-            --fee 0.0013 \
-            --slippage 0.0005 \
-            --symbols BTCUSDT ETHUSDT \
-            --report backtest_profitable_only_report.json
+      - name: Run 180-day BTC and ETH walk-forward backtest
+        run: python -u backtest_profitable_only.py
 
       - name: Upload backtest report
         if: always() && hashFiles('backtest_profitable_only_report.json') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: profitable-only-backtest-report
+          name: backtest-profitable-only-report
           path: backtest_profitable_only_report.json
+          if-no-files-found: error
           retention-days: 30
