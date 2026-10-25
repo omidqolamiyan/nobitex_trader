@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Nobitex Win/Loss Selector v1.2.0 — research only; no real orders."""
+"""Nobitex Win/Loss and Positive-Return Selector v1.3.0 — research only; no real orders."""
 from __future__ import annotations
 import argparse, datetime as dt, json, math, statistics, time, urllib.parse, urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 API_URL = "https://apiv2.nobitex.ir/market/udf/history"
 REPORT_FILE = "backtest_profitable_only_report.json"
 INITIAL_CAPITAL = 5.0
@@ -239,9 +239,14 @@ def buy_hold(candles,capital=INITIAL_CAPITAL,fee=FEE_RATE,slip=SLIPPAGE_RATE):
     trade=Trade(candles[0].t,candles[-1].t,entry,exit_fill,q,pnl,pnl/capital*100,"buy_and_hold")
     return Result(capital,end,(end/capital-1)*100,dd*100,1,int(pnl>0),int(pnl<0),100.0 if pnl>0 else 0.0,math.inf if pnl>0 else None,[trade],curve,0)
 
-def should_remove_family(wins, losses):
-    """The sole strategy-family removal criterion requested by the user."""
-    return int(losses) > int(wins)
+def should_retain_family(wins, losses, compounded_oos_return_pct):
+    """Retain only when wins exceed losses AND compounded OOS net return is positive."""
+    try:
+        wins, losses = int(wins), int(losses)
+        net = float(compounded_oos_return_pct)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return wins > losses and math.isfinite(net) and net > 0.0
 
 
 def score(result):
@@ -288,9 +293,15 @@ def run_market(symbol,candles,configs,capital,fee,slip,resolution,buy_fraction=B
         compounded=1.0
         for r in family_rows: compounded*=max(0.0,1+float(r["oos_return_pct"])/100)
         net=(compounded-1)*100 if family_rows else None
-        remove=should_remove_family(wins,losses)
-        (removed if remove else retained).append(family)
-        family_report[family]={"oos_fold_count":len(family_rows),"active_oos_folds":len(active_returns),"oos_trades":trade_count,"winning_trades":wins,"losing_trades":losses,"winning_minus_losing_trades":wins-losses,"positive_active_folds":sum(x>0 for x in active_returns),"negative_active_folds":sum(x<0 for x in active_returns),"compounded_oos_return_pct":round(net,6) if net is not None else None,"retained_by_win_loss_rule":not remove,"decision":"removed: losing trades exceed winning trades" if remove else ("retained: wins equal losses" if wins==losses else "retained: winning trades exceed losing trades")}
+        retain=should_retain_family(wins,losses,net)
+        (retained if retain else removed).append(family)
+        if wins <= losses:
+            decision = "removed: winning trades do not exceed losing trades"
+        elif net is None or not math.isfinite(net) or net <= 0:
+            decision = "removed: compounded out-of-sample net return is not positive"
+        else:
+            decision = "retained: wins exceed losses and compounded out-of-sample net return is positive"
+        family_report[family]={"oos_fold_count":len(family_rows),"active_oos_folds":len(active_returns),"oos_trades":trade_count,"winning_trades":wins,"losing_trades":losses,"winning_minus_losing_trades":wins-losses,"positive_active_folds":sum(x>0 for x in active_returns),"negative_active_folds":sum(x<0 for x in active_returns),"compounded_oos_return_pct":round(net,6) if net is not None else None,"retained_by_selection_rule":retain,"decision":decision}
     sec=interval_seconds(resolution); gaps=[]
     for a,b in zip(candles,candles[1:]):
         steps=round((b.t-a.t)/sec)
@@ -299,9 +310,12 @@ def run_market(symbol,candles,configs,capital,fee,slip,resolution,buy_fraction=B
     return {"symbol":symbol,"retained_strategy_families":retained,"removed_strategy_families":removed,"strategy_family_audit":family_report,"candles":len(candles),"data_start_utc":utc(candles[0].t),"data_end_utc":utc(candles[-1].t),"data_quality":{"internal_gap_events":len(gaps),"estimated_missing_internal_intervals":sum(g["missing_intervals"] for g in gaps),"largest_gap_intervals":max((g["missing_intervals"] for g in gaps),default=0),"gap_examples":gaps[:20]},"buy_and_hold_full_period":summary(hold),"walk_forward":{"folds":len(folds),"strategy_family_evaluations":len(valid),"evaluations_skipped":len(rows)-len(valid),"families_tested":sorted(configs_by_family),"total_oos_trades_across_family_tests":sum(r["oos_trades"] for r in valid)},"fold_details":rows}
 
 def self_test():
-    assert should_remove_family(2,3) is True
-    assert should_remove_family(3,2) is False
-    assert should_remove_family(2,2) is False
+    assert should_retain_family(3,2,0.1) is True
+    assert should_retain_family(2,3,5.0) is False
+    assert should_retain_family(2,2,5.0) is False
+    assert should_retain_family(4,1,0.0) is False
+    assert should_retain_family(4,1,-0.1) is False
+    assert should_retain_family(0,0,None) is False
     base=1700000000
     assert ema_series([1,2,3,4],3)[1] is None
     assert rsi([1,2,3,4,5],3,4)==100.0
@@ -329,7 +343,7 @@ def self_test():
     open_cfg=Config("RSI",(("period",1),("oversold",100),("overbought",101)),50,100)
     r=simulate(test,open_cfg,10,0,0,start_index=2,buy_fraction=.75)
     assert r.closed_trades==len(r.trades)
-    return {"status":"passed","checks":["win/loss selector removes only when losses exceed wins","EMA warm-up","RSI monotonic rise","fees/slippage reduce buy-and-hold","75% cash allocation arithmetic","stop-first same-candle handling","finite equity curve","signal helper equivalence","incomplete OOS fold omitted","forced liquidation included in trade statistics"]}
+    return {"status":"passed","checks":["selection requires wins greater than losses AND positive compounded OOS return","EMA warm-up","RSI monotonic rise","fees/slippage reduce buy-and-hold","75% cash allocation arithmetic","stop-first same-candle handling","finite equity curve","signal helper equivalence","incomplete OOS fold omitted","forced liquidation included in trade statistics"]}
 
 def main():
     parser=argparse.ArgumentParser(description="Nobitex historical backtest; research only")
@@ -350,7 +364,7 @@ def main():
             mr=run_market(symbol,candles,configs,args.capital,args.fee,args.slippage,args.resolution,args.buy_fraction);mr["coverage_pct"]=round(coverage*100,3);mr["expected_candles"]=expected;mr["missing_candles_estimate"]=max(0,expected-len(candles));markets[symbol]=mr;print(symbol,json.dumps(mr["walk_forward"],ensure_ascii=False))
         except Exception as exc:markets[symbol]={"error":str(exc)};print(f"ERROR {symbol}: {exc}")
         if idx+1<len(args.symbols):time.sleep(REQUEST_DELAY_SECONDS)
-    report={"version":VERSION,"generated_at_utc":dt.datetime.now(dt.timezone.utc).isoformat(),"research_only":True,"real_orders_enabled":False,"purpose":"Research-only strategy-family selector; no live orders.","settings":{"days":args.days,"resolution":args.resolution,"initial_capital":args.capital,"buy_cash_fraction":args.buy_fraction,"fee_per_side":args.fee,"slippage_per_side":args.slippage,"symbols":args.symbols,"train_days":TRAIN_DAYS,"test_days":TEST_DAYS,"min_training_trades":MIN_TRAIN_TRADES,"drawdown_penalty":DRAWDOWN_PENALTY,"config_count":len(configs),"coverage_threshold":MIN_COVERAGE,"max_candles_per_request":MAX_CANDLES_PER_REQUEST,"selection_metric":"training net return minus 0.5 * max drawdown (%)","selection_rule":"remove a strategy family only when total losing out-of-sample trades are greater than total winning out-of-sample trades; ties are retained","selection_scope":"per market and strategy family across all valid walk-forward out-of-sample folds","limitations":["Intrabar order is unknown; stop assumed first if stop and target both touched","Each OOS fold starts with fresh capital; training candles are indicator warm-up only","No partial fills, bid/ask spread, funding, or exchange outage model","Only complete 14-day OOS folds included","Coverage count does not guarantee no internal gaps; gap audit is reported","Win/loss count alone does not establish profitability; review net return, fees, drawdown, and trade count too","Family grouping is based on strategy family selected in each walk-forward fold; it is not a full nested hyperparameter significance test"]},"self_test":self_test(),"markets":markets}
+    report={"version":VERSION,"generated_at_utc":dt.datetime.now(dt.timezone.utc).isoformat(),"research_only":True,"real_orders_enabled":False,"purpose":"Research-only selector; retain a strategy family only when wins exceed losses and compounded out-of-sample net return is positive; no live orders.","settings":{"days":args.days,"resolution":args.resolution,"initial_capital":args.capital,"buy_cash_fraction":args.buy_fraction,"fee_per_side":args.fee,"slippage_per_side":args.slippage,"symbols":args.symbols,"train_days":TRAIN_DAYS,"test_days":TEST_DAYS,"min_training_trades":MIN_TRAIN_TRADES,"drawdown_penalty":DRAWDOWN_PENALTY,"config_count":len(configs),"coverage_threshold":MIN_COVERAGE,"max_candles_per_request":MAX_CANDLES_PER_REQUEST,"selection_metric":"training net return minus 0.5 * max drawdown (%)","selection_rule":"retain a strategy family only when total winning out-of-sample trades exceed total losing out-of-sample trades AND compounded out-of-sample net return after modeled fees and slippage is positive; otherwise remove it","selection_scope":"per market and strategy family across all valid walk-forward out-of-sample folds","limitations":["Intrabar order is unknown; stop assumed first if stop and target both touched","Each OOS fold starts with fresh capital; training candles are indicator warm-up only","No partial fills, bid/ask spread, funding, or exchange outage model","Only complete 14-day OOS folds included","Coverage count does not guarantee no internal gaps; gap audit is reported","Selection requires both wins greater than losses and positive compounded out-of-sample net return; positive historical return does not guarantee future profits","Family grouping is based on strategy family selected in each walk-forward fold; it is not a full nested hyperparameter significance test"]},"self_test":self_test(),"markets":markets}
     with open(args.report,"w",encoding="utf-8") as f:json.dump(report,f,ensure_ascii=False,indent=2,allow_nan=False)
     print("Report saved:",args.report)
     return 0 if markets and all("error" not in x for x in markets.values()) else 1
