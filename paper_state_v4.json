@@ -9,14 +9,14 @@
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1793319000
+        "last_candle": 1793320200
       },
       "ETHUSDT": {
         "cash": 0.9528938859258517,
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1793319000
+        "last_candle": 1793320200
       }
     },
     "REVERSAL": {
@@ -25,14 +25,14 @@
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1793319000
+        "last_candle": 1793320200
       },
       "ETHUSDT": {
-        "cash": 0.0,
-        "qty": 0.0005575537215148194,
-        "entry_price": 2268.9,
-        "entry_cost": 1.2666781824753424,
-        "last_candle": 1793319000
+        "cash": 1.2316053013068906,
+        "qty": 0.0,
+        "entry_price": 0.0,
+        "entry_cost": 0.0,
+        "last_candle": 1793320200
       }
     }
   },
@@ -3405,6 +3405,16 @@
       "price": 77779.7,
       "qty": 1.592340596496372e-05,
       "pnl": -0.02723276755397941,
+      "reason": "STOP_LOSS_NET"
+    },
+    {
+      "time_utc": "2026-10-30T00:37:20.314755+00:00",
+      "strategy": "REVERSAL",
+      "symbol": "ETHUSDT",
+      "side": "SELL",
+      "price": 2211.82,
+      "qty": 0.0005575537215148194,
+      "pnl": -0.03507288116845175,
       "reason": "STOP_LOSS_NET"
     }
   ]
