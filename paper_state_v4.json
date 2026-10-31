@@ -9,14 +9,14 @@
         "qty": 1.2015631607700534e-05,
         "entry_price": 77490.0,
         "entry_cost": 0.9323017119619794,
-        "last_candle": 1793466300
+        "last_candle": 1793466600
       },
       "ETHUSDT": {
         "cash": 0.9139410812512012,
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1793466300
+        "last_candle": 1793466600
       }
     },
     "REVERSAL": {
@@ -25,14 +25,14 @@
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1793466300
+        "last_candle": 1793466600
       },
       "ETHUSDT": {
         "cash": 1.2316053013068906,
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1793466300
+        "last_candle": 1793466600
       }
     }
   },
