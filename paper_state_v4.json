@@ -21,10 +21,10 @@
     },
     "REVERSAL": {
       "BTCUSDT": {
-        "cash": 0.0,
-        "qty": 1.697780839618749e-05,
-        "entry_price": 72759.79,
-        "entry_cost": 1.2369076658724756,
+        "cash": 1.2107283178182453,
+        "qty": 0.0,
+        "entry_price": 0.0,
+        "entry_cost": 0.0,
         "last_candle": 1794496500
       },
       "ETHUSDT": {
@@ -6056,6 +6056,16 @@
       "qty": 1.697780839618749e-05,
       "pnl": 0.0,
       "reason": "اشباع فروش و نشانه اولیه برگشت"
+    },
+    {
+      "time_utc": "2026-11-12T15:23:25.993722+00:00",
+      "strategy": "REVERSAL",
+      "symbol": "BTCUSDT",
+      "side": "SELL",
+      "price": 71405.23,
+      "qty": 1.697780839618749e-05,
+      "pnl": -0.026179348054230278,
+      "reason": "STOP_LOSS_NET"
     }
   ]
 }
