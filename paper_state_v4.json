@@ -9,30 +9,30 @@
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1794482400
+        "last_candle": 1794484200
       },
       "ETHUSDT": {
         "cash": 0.7360335504828275,
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1794482400
+        "last_candle": 1794484200
       }
     },
     "REVERSAL": {
       "BTCUSDT": {
-        "cash": 1.2369076658724756,
-        "qty": 0.0,
-        "entry_price": 0.0,
-        "entry_cost": 0.0,
-        "last_candle": 1794482400
+        "cash": 0.0,
+        "qty": 1.697780839618749e-05,
+        "entry_price": 72759.79,
+        "entry_cost": 1.2369076658724756,
+        "last_candle": 1794484200
       },
       "ETHUSDT": {
         "cash": 0.0,
         "qty": 0.0005865565788164982,
         "entry_price": 2018.35,
         "entry_cost": 1.1854155102663897,
-        "last_candle": 1794482400
+        "last_candle": 1794484200
       }
     }
   },
@@ -6046,6 +6046,16 @@
       "qty": 1.0197107059730024e-05,
       "pnl": -0.003485401631380336,
       "reason": "ضعف تأییدشده روند"
+    },
+    {
+      "time_utc": "2026-11-12T11:57:37.246717+00:00",
+      "strategy": "REVERSAL",
+      "symbol": "BTCUSDT",
+      "side": "BUY",
+      "price": 72759.79,
+      "qty": 1.697780839618749e-05,
+      "pnl": 0.0,
+      "reason": "اشباع فروش و نشانه اولیه برگشت"
     }
   ]
 }
