@@ -16,7 +16,7 @@
         "qty": 0.0003690729077620453,
         "entry_price": 1940.0,
         "entry_cost": 0.7169322429317438,
-        "last_candle": 1794551400
+        "last_candle": 1794552900
       }
     },
     "REVERSAL": {
@@ -32,7 +32,7 @@
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1794551400
+        "last_candle": 1794552900
       }
     }
   },
