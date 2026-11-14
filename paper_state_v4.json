@@ -5,34 +5,34 @@
   "strategies": {
     "TREND": {
       "BTCUSDT": {
-        "cash": 0.0,
-        "qty": 1.0748517854070982e-05,
-        "entry_price": 68368.87,
-        "entry_cost": 0.7358193430834729,
-        "last_candle": 1794642900
+        "cash": 0.7114849840027596,
+        "qty": 0.0,
+        "entry_price": 0.0,
+        "entry_cost": 0.0,
+        "last_candle": 1794667200
       },
       "ETHUSDT": {
         "cash": 0.7152217623613146,
         "qty": 0.0,
         "entry_price": 0.0,
         "entry_cost": 0.0,
-        "last_candle": 1794642900
+        "last_candle": 1794667200
       }
     },
     "REVERSAL": {
       "BTCUSDT": {
-        "cash": 1.2107283178182453,
-        "qty": 0.0,
-        "entry_price": 0.0,
-        "entry_cost": 0.0,
-        "last_candle": 1794642900
+        "cash": 0.0,
+        "qty": 1.8243173039677193e-05,
+        "entry_price": 66279.94,
+        "entry_cost": 1.2107283178182453,
+        "last_candle": 1794667200
       },
       "ETHUSDT": {
-        "cash": 1.161676475113006,
-        "qty": 0.0,
-        "entry_price": 0.0,
-        "entry_cost": 0.0,
-        "last_candle": 1794642900
+        "cash": 0.0,
+        "qty": 0.0006237966805816127,
+        "entry_price": 1859.85,
+        "entry_cost": 1.161676475113006,
+        "last_candle": 1794667200
       }
     }
   },
@@ -6226,6 +6226,36 @@
       "qty": 1.0748517854070982e-05,
       "pnl": 0.0,
       "reason": "روند صعودی تأییدشده و RSI مناسب"
+    },
+    {
+      "time_utc": "2026-11-14T14:47:39.430721+00:00",
+      "strategy": "TREND",
+      "symbol": "BTCUSDT",
+      "side": "SELL",
+      "price": 66279.94,
+      "qty": 1.0748517854070982e-05,
+      "pnl": -0.02433435908071324,
+      "reason": "STOP_LOSS_NET"
+    },
+    {
+      "time_utc": "2026-11-14T14:47:39.435825+00:00",
+      "strategy": "REVERSAL",
+      "symbol": "BTCUSDT",
+      "side": "BUY",
+      "price": 66279.94,
+      "qty": 1.8243173039677193e-05,
+      "pnl": 0.0,
+      "reason": "اشباع فروش و نشانه اولیه برگشت"
+    },
+    {
+      "time_utc": "2026-11-14T14:47:39.435944+00:00",
+      "strategy": "REVERSAL",
+      "symbol": "ETHUSDT",
+      "side": "BUY",
+      "price": 1859.85,
+      "qty": 0.0006237966805816127,
+      "pnl": 0.0,
+      "reason": "اشباع فروش و نشانه اولیه برگشت"
     }
   ]
 }
